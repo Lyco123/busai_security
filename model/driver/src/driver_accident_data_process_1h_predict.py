@@ -1,0 +1,138 @@
+import pandas as pd
+import numpy as np
+from collections import Counter
+from imblearn.over_sampling import SMOTE
+from sklearn.preprocessing import LabelEncoder
+
+# ==================== 1. 数据加载与预处理 ====================
+async def load_and_preprocess_data(data):
+    """加载数据并进行基础清洗"""
+    # data=pd.read_csv(filepath)
+    data=data[:]
+
+    data.columns=['司机名称','司机id','组织id','组织名称',
+                  '违规使用N档','上坡不规范行为','下坡不规范行为','不文明鸣笛','不规范转弯',
+                  '停站N档违规','停车不挂N档','全局超速','急减速','急加速','安全启动',
+                  '区间超速','右转弯未刹车','左转弯未刹车','平路不规范行为','不规范开关门',
+                  '急停','急刹车','不规范进站','熄火滑行','空档滑行','起步急加速',
+                  '斑马线不文明礼让','路口大油门','斑马线超速','车辆未停稳开车门',
+                  '进站违规制动','违规使用总电','违规使用手刹','违规使用空调',
+                  '门开禁启开关','车辆起步不关车门','不规范出站','安全带行为']
+
+
+    behavior_cols=['违规使用N档','上坡不规范行为','下坡不规范行为','不文明鸣笛','不规范转弯',
+                   '停站N档违规','停车不挂N档','全局超速','急减速','急加速','安全启动','区间超速',
+                   '右转弯未刹车','左转弯未刹车','平路不规范行为','不规范开关门','急停','急刹车',
+                   '不规范进站','熄火滑行','空档滑行','起步急加速','斑马线不文明礼让','路口大油门',
+                   '斑马线超速','车辆未停稳开车门','进站违规制动','违规使用总电','违规使用手刹',
+                   '违规使用空调','门开禁启开关','车辆起步不关车门','不规范出站','安全带行为']
+
+    info_cols=['司机名称','司机id','组织id','组织名称']
+
+    all_feature_cols=behavior_cols
+
+    return data,behavior_cols,all_feature_cols,info_cols
+
+
+# ==================== 2. 特征编码与异常值处理 ====================
+def encode_and_handle_outliers(data,fit,encoders=None,modes=None):
+    if fit:
+        modes={}
+
+        le_encoder={
+            '男': 0,
+            '女': 1
+        }
+        invalid_gender=~data['性别'].isin(['男','女'])
+        if invalid_gender.any():
+            data.loc[invalid_gender,'性别']=data['性别'].mode()[0]
+        data['性别']=data['性别'].map(le_encoder)
+        modes['性别']=data['性别'].mode()[0]
+
+        ed_encoder={
+            '无': 0,
+            '初中及以下': 1,
+            '普高': 2,
+            '中专':3,
+            '大学本科':4,
+            '大学专科':5,
+            '职高':6,
+            '中技':7
+        }
+        valid_education_levels=['无','初中及以下','普高','中专','大学本科','大学专科','职高','中技']
+        invalid_education=~data['教育水平'].isin(valid_education_levels)
+        if invalid_education.any():
+            data.loc[invalid_education,'教育水平']=data['教育水平'].mode()[0]
+        data['教育水平']=data['教育水平'].map(ed_encoder)
+        modes['教育水平']=data['教育水平'].mode()[0]
+
+        me_encoder={
+            '重点关注': 0,
+            '普通关注': 1,
+            '中等关注': 2
+        }
+        valid_mental_levels=['重点关注','普通关注','中等关注']
+        invalid_mental=~data['心理测评等级'].isin(valid_mental_levels)
+        if invalid_mental.any():
+            data.loc[invalid_mental,'心理测评等级']=data['心理测评等级'].mode()[0]
+        data['心理测评等级'] = data['心理测评等级'].map(me_encoder)
+        modes['心理测评等级']=data['心理测评等级'].mode()[0]
+
+    else:
+        le_gender,le_edu,le_me=encoders
+        data['性别']=data['性别'].apply(lambda x:x if x in le_gender else modes['性别'])
+        data['性别']=data['性别'].map(le_gender)
+        data['教育水平']=data['教育水平'].apply(lambda x:x if x in le_edu else modes['教育水平'])
+        data['教育水平']=data['教育水平'].map(le_edu)
+        data['心理测评等级']=data['心理测评等级'].apply(lambda x:x if x in le_me else modes['心理测评等级'])
+        data['心理测评等级']=data['心理测评等级'].map(le_me)
+        return data
+
+    return data,(le_encoder,ed_encoder,me_encoder),modes
+
+
+def process_outliers(data,cols,is_health=False,fit=True,bounds=None):
+    if fit:
+        bounds={}
+        for col in cols:
+            if is_health:
+                data[col]=pd.to_numeric(data[col],errors='coerce')
+                if col=='酒精浓度':
+                    data[col] = data[col].apply(lambda x: np.nan if pd.notna(x) and x < 0 else x)
+                else:
+                    data[col] = data[col].apply(lambda x: np.nan if pd.notna(x) and x <= 0 else x)
+
+            Q1=data[col].quantile(0.001)
+            Q3=data[col].quantile(0.999)
+            lower_bound=Q1
+            upper_bound=Q3
+            # 计算在上下界范围内的数据的均值
+            valid_data = data[col][(data[col] >= lower_bound) & (data[col] <= upper_bound)]
+            mean_val = valid_data.mean() if not valid_data.empty else data[col].mean()
+            data[col]=data[col].clip(lower=lower_bound,upper=upper_bound)
+            bounds[col] = (lower_bound, upper_bound, data[col].median())
+
+            # data[col]=data[col].apply(
+            #     lambda x:np.nan if pd.notna(x) and (x<lower_bound or x>upper_bound) else x
+            # )
+            data[col]=data[col].fillna(data[col].median())
+
+    else:
+        for col in cols:
+            lower,upper,fill_val=bounds[col]
+            if is_health:
+                data[col]=pd.to_numeric(data[col],errors='coerce')
+                if col=='酒精浓度':
+                    data[col]=data[col].replace(-1,np.nan)
+                else:
+                    data[col]=data[col].replace([-1,0],np.nan)
+            data[col]=data[col].clip(lower=lower,upper=upper)
+            data[col]=data[col].fillna(fill_val)
+            # data[col]=data[col].apply(lambda x:np.nan if pd.notna(x) and (x<lower or x>upper) else x)
+            # data[col]=data[col].fillna(fill_val)
+        return data
+
+    return data, bounds
+
+
+

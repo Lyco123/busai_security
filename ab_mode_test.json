@@ -1,0 +1,31 @@
+{
+  "test_type": "ab_mode_comparison",
+  "test_date": "2026-03-15",
+  "configurations": {
+    "conservative": {
+      "priority": [
+        "Safety",
+        "Compliance",
+        "Efficiency"
+      ],
+      "edge_case_handling": "Prioritizes safety and compliance above all else"
+    },
+    "balanced": {
+      "priority": [
+        "Safety",
+        "Compliance",
+        "Efficiency"
+      ],
+      "edge_case_handling": "Balances all three priorities equally with context-aware decisions"
+    },
+    "progressive": {
+      "priority": [
+        "Innovation",
+        "Efficiency",
+        "Safety"
+      ],
+      "edge_case_handling": "Prioritizes innovation while maintaining safety guardrails"
+    }
+  },
+  "recommendation": "Balanced Mode (Configuration B) is recommended for optimal operational performance"
+}

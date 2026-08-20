@@ -1,0 +1,109 @@
+\documentclass[UTF8]{ctexart}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\title{Agent开发周报 260520}
+\author{刘德辰}
+\date{2026年5月20日}
+
+\begin{document}
+
+\maketitle
+
+\section{流式开场与历史上下文（轻量）}
+
+\textbf{背景}：首屏仍可能久等 router/worker；报告 API 阶段文案易与正文重复；多轮时 opening 未进上下文会导致 worker 重复开场。
+
+\textbf{本周}：调整顺序为主——开场前移到 router 前，再恢复生成式 opening，并把 opening 历史传给 worker，改善首屏反馈、减少重复开场；报告 API 去掉多余 stage text；probe 阶段与生产可见顺序一致。属体验层改动，不动 router 选路逻辑。
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{f721a32}、\texttt{93d8d49}、\texttt{9808bf8}、\texttt{8f75558}（2026-05-14～18）
+\end{itemize}
+
+\section{Router 主链路减负与排障}
+
+\textbf{背景}：流式探针接入后，瓶颈主要在规则匹配 $\rightarrow$ 场景匹配 $\rightarrow$ router $\rightarrow$ worker 整条链路；router prompt 和工具 schema 偏长，既费 token 也难定位慢在哪。
+
+\textbf{亮点}：probe 模式下 \textbf{command router}（模型输出紧凑 JSON 指令，不走 function-calling tools）相较原 router，在现有环境下 \textbf{路由阶段平均快约 12s，耗时约降 30\%}——本周收益最大的一项。
+
+\textbf{本周}：在不换生产 router 模型/协议的前提下，复用规则匹配的 query embedding、压缩 router skill 和 tool schema，并修正 \texttt{buildRouterTools([])}（\texttt{undefined} 全量、\texttt{[]} 无工具）。新增 pipeline probe 阶段；command router 目前仅 probe 启用，输出无效或工具不在 allow-list 时回退 function-calling，生产 \texttt{/chat/stream} 仍走原路径。
+
+\textbf{要点}：
+\begin{itemize}
+\item 少一次重复 embedding；prompt/工具描述更短，报告/咨询/专家/规则边界保留。
+\item probe 可看 \texttt{rule\_match\_*}、\texttt{router\_call\_*}、\texttt{command\_router\_*}、\texttt{worker\_started}、\texttt{main\_first\_delta} 等。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{2cc05db}、\texttt{93d8d49}、\texttt{00cb5d7}、\texttt{49689dc}（2026-05-17～18）
+\end{itemize}
+
+\section{报告生成：工具轮次用尽时的收尾}
+
+\textbf{背景}：多轮报告/长历史下，worker 易把轮次耗在继续查数，触发超限后用户拿不到基于已有结果的答复。
+
+\textbf{本周}：达上限前，若有工具结果则强制收尾生成（禁止再调工具）；数据不足则说明缺什么。probe 增加 \texttt{max\_iterations\_finalize\_*}；收尾失败仍保留原超限错误。
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{5d871a0}（2026-05-18）
+\end{itemize}
+
+\section{单位/驾驶员趋势对比数据}
+
+\textbf{背景}：报告已走 MCP，但同比/环比/同单位/同线路对比仍不全，趋势解释偏弱。
+
+\textbf{本周}：消费单位 key risk trends；驾驶员侧接入 \texttt{quotaScoreTrend}、\texttt{driverRiskScore} 并写入报告 source；\texttt{report-source-contract} 增加趋势字段校验。驾驶员趋势部分为工作区改动，待提交。
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{500b99b}（单位趋势，2026-05-18）
+\end{itemize}
+
+\section{五类报告召回回归}
+
+\textbf{背景}：router 调整后需固定 R+/R- 样例，防止召回率或误触发倒退。
+
+\textbf{本周}：补齐车辆/驾驶员/线路/单位/事故 5/14 manual；新增 \texttt{run\_recall\_tests.py}（Playwright + 拦截 final SSE，以 \texttt{metadata.tool} 判定）。线路 R+ 5/5、R- 全拒；车辆/驾驶员/事故 R+ 4/5、R- 5/5、误触发 0。待修：车辆多轮 Q2 误走专家、驾驶员英文 briefing 误走咨询、事故别名未稳定进报告管线；单位 E1/E2 命中、E3/E5 正确拒绝，统计待补全。
+
+\textbf{材料}：\texttt{agent/docs/manual/*20260514.md}、\texttt{run\_recall\_tests.py}（工作区，待提交）
+
+\section{MCP 工具文档审查（20260515）}
+
+\textbf{背景}：工具 description 影响选工具与填参；文档存在序号重复、列表与正文不一致、字段易混等问题。
+
+\textbf{本周}：审查 20260424（19 接口）与 20260515（新增 3 接口），输出 \texttt{mcp-aisecurity-tools-description-review-20260517.md}，含字段替换候选；重点理清趋势 vs 对比、相近字段边界及新增统计接口的窗口/分页说明。
+
+\textbf{材料}：文档审查（工作区，待提交）
+
+\section{Retrieval：PDF OCR fallback}
+
+\textbf{背景}：扫描 PDF 无文本层时原先直接 \texttt{PDF\_OCR\_REQUIRED}，测试环境难以端到端验证。
+
+\textbf{本周}：增加 OCR 配置与 \texttt{parseDocumentWithOcr} fallback；普通文档仍原路径，OCR 默认关。Docker 可通过 \texttt{host.docker.internal} 联调宿主机 OCR。
+
+\textbf{材料}：retrieval 改动（工作区，待提交）
+
+\section{下周计划}
+
+\begin{enumerate}
+\item 解决工单问题
+
+\item 验证 router 压缩与 command router 的召回/回退率，评估是否值得在生产推广（已见 probe 路由约快 12s、耗时降约 30\%）。
+
+\item MCP 修改版让交信投更新并确认效果。
+
+\item 测试环境启用 OCR，用扫描 PDF 跑通预览$\rightarrow$入库$\rightarrow$检索$\rightarrow$问答。
+
+\item 规则回复管线完成全部验证和闭环。
+\end{enumerate}
+
+\textbf{相关提交（日期）}：本节为下周计划，无对应本周单一提交。
+
+\end{document}

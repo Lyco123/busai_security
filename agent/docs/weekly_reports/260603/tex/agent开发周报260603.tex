@@ -1,0 +1,91 @@
+\documentclass[UTF8]{ctexart}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\title{Agent开发周报 260603}
+\author{刘德辰}
+\date{2026年6月3日}
+
+\begin{document}
+
+\maketitle
+
+\section{PoingCode 工单处理：三类核心问题修复}
+
+\textbf{背景}：本周 PoingCode 工单主要集中在三类问题：一是回答里暴露内部思考流程和内部过程文字；二是 ID、编号和用户可读名称区分不清；三是需要多步查询时，模型没有稳定地连续调用工具拿到最终字段。
+
+\textbf{本周}：收敛前端和后端输出，把运行中的查询过程保留在处理过程里，最终回答减少内部过程文字；补充对话型专家的查询规则，明确 ID、编号只作为补查键，用户问“哪个/哪条/所属/名称”时要输出业务名称或用户可识别标识；强化 to plan 多步调用能力，当一个工具只能查到中间字段时，继续用中间字段调用后续工具，直接拿到用户真正要的最终字段。
+
+\textbf{修复点}：
+\begin{itemize}
+\item 避免把查询规划、工具调用过程、内部状态说明直接混进最终答案。
+\item 避免把 \texttt{routeId}、车辆 ID、驾驶员工号等内部字段直接当成名称回答。
+\item 多步查询成功率明显提升，能从中间 ID 继续补查到线路名、车辆名、所属单位等最终字段。
+\item 避免在还能继续查的情况下让用户补充信息；只有确实缺少用户才能提供的信息时才澄清。
+\item 增加空回复/空工具调用保护，减少多步查询中的空转。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{a298fdc}、\texttt{6fa8316}、\texttt{6a9902a}、\texttt{5e9a0c4}、\texttt{b6238aa}、\texttt{845fe54}（2026-05-28～30）
+\end{itemize}
+
+\section{报告模型通道与前端过程展示}
+
+\textbf{背景}：报告生成和普通问答对模型能力、速度和稳定性的要求不同。继续共用同一套模型配置，容易让报告生成受主问答模型配置影响；同时前端流式过程中会显示较多查询过程，最终消息里也显得偏乱。
+
+\textbf{本周}：新增报告专用模型配置，报告相关 LLM 调用可以走独立的 \texttt{OPENAI\_REPORT\_BASE\_URL} / \texttt{OPENAI\_REPORT\_MODEL}，与普通 router、专家问答模型解耦；线上配置中已补充报告模型地址和模型名。前端助手页面保留运行中的进度和工具活动，最终回答完成后把处理过程收进可展开区域，默认减少正文干扰。
+
+\textbf{要点}：
+\begin{itemize}
+\item 报告生成可使用单独模型服务，便于后续按报告质量和耗时单独调参。
+\item 流式过程中仍能看到查数和处理状态，方便排障。
+\item 最终消息默认突出结论和正文，处理过程可展开查看。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{ba9faf5}、\texttt{f466f90}（2026-05-29～30）
+\end{itemize}
+
+\section{事故报告管线对齐与真实接口迁移}
+
+\textbf{背景}：事故调查报告原先依赖的聚合 MCP 接口不可用，且结构上没有完全对齐驾驶员、车辆、单位、线路四类报告。继续按事故编号查询会导致链路无法落地；根据最新 MCP 文档，当前可用入口是按驾驶员姓名和事故日期查询事故列表，再补充驾驶员/单位事故统计等接口。
+
+\textbf{本周}：将事故调查报告管线按其他四类报告的方式重整：事故报告也走“先查源数据、再生成结构化报告、最后规范化展示”的流程；补充事故报告模板 \texttt{事故分析报告模板new0601.md}，把标题占位从留白改为事故简述，并标注对应 MCP 来源字段。同步将事故报告入口从不可用的事故编号聚合接口，切换到真实可用的 \texttt{get\_mcp\_ods\_odsJituanBsEmployee\_getAccidentList}。报告触发参数从单一 \texttt{incident\_id} 改为 \texttt{driver\_name + accident\_date}，并在后续补充调用驾驶员事故统计、单位事故统计、驾驶员/线路/车辆建议等接口，形成事故报告所需的基础信息、统计信息和整改建议。
+
+\textbf{要点}：
+\begin{itemize}
+\item 事故报告 source 合并驾驶员、线路、车辆三类建议数据，用于整改措施章节。
+\item 减少重复查数，事故识别后直接复用已解析的数据，不再重复请求同一批源数据。
+\item 调整事故报告 normalizer，兼容部分字段为空的离线/测试数据。
+\item router 工具参数改为驾驶员姓名和事故日期，避免继续要求用户提供当前接口不支持的事故编号。
+\item 澄清状态、参数校验、历史上下文摘要、?????? 和 fixture 同步改成“驾驶员姓名 + 日期”口径。
+\item demo 网关和工具注册表同步切换到事故列表接口，便于本地和测试环境验证。
+\item 事故报告默认日期字段按 \texttt{yyyyMMdd} 处理，与 MCP 接口要求一致。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{8b59f26}、\texttt{5f8c3c6}（2026-06-03）
+\end{itemize}
+
+\section{下周计划}
+
+\begin{enumerate}
+\item RAG 功能测试，知识库对接
+
+\item 结合 PoingCode 工单迭代/修复
+
+\item 跑报告召回和车牌容错自动化用例，补充事故报告新入参后的回归样例。
+
+\item 验证 MCP description 第一版更新效果，确认“数据查不到”的问题是否减少，周五前完成第二版
+\end{enumerate}
+
+\textbf{相关提交（日期）}：本节为下周计划，无对应本周单一提交。
+
+\end{document}

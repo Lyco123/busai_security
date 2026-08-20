@@ -1,0 +1,50 @@
+version: "3.9"
+
+services:
+  kb-api:
+    build: .
+    container_name: kb-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - qdrant
+    volumes:
+      - kb_files:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cpus: 1.5
+    mem_limit: 2500m
+
+  kb-worker:
+    build: .
+    container_name: kb-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["node", "dist/worker.js"]
+    depends_on:
+      - qdrant
+    volumes:
+      - kb_files:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cpus: 1.0
+    mem_limit: 2000m
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    container_name: kb-qdrant
+    restart: unless-stopped
+    expose:
+      - "6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    cpus: 1.0
+    mem_limit: 5000m
+
+volumes:
+  qdrant_data:
+  kb_files:

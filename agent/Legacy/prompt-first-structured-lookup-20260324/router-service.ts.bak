@@ -1,0 +1,1205 @@
+import { readFirstStringAtPaths } from './structured-report-normalizers';
+import { buildContextFromHistory, type ChatCompletionMessage, type HistoryMessage } from './context';
+import type { AbTestGroup, RuleRoutingMode } from '../ab-test/config';
+import type { StructuredLookupToolName } from './structured-lookup';
+import {
+  buildWorkerPrompt,
+  type ToolProvider,
+  type ToolResult,
+  type ToolUsage,
+  type StructuredReportWorkerToolName,
+  type WorkerToolName,
+} from './worker-runner';
+
+interface SessionAbTestResolution {
+  experiment: string;
+  group: AbTestGroup | null;
+  locked: boolean;
+  source: string;
+  routingMode: RuleRoutingMode;
+}
+
+export interface RouteRequestOptions {
+  isStream?: boolean;
+  sessionId?: string;
+  routingMode: RuleRoutingMode;
+  abTestResolution: SessionAbTestResolution;
+  skipRuleId?: string;
+  ruleExitFallback?: boolean;
+}
+
+interface RouteRequestDeps {
+  DEFAULT_MODEL: string;
+  MAX_ROUTER_TOOL_ITERATIONS: number;
+  ROUTER_SKILL: string;
+  ROUTER_TOOL_ALLOW_LIST: readonly string[];
+  precomputeRuleMatchContext: (env: any, query: string) => Promise<any>;
+  renderRuleMatchForPrompt: (
+    ruleMatchContext: any,
+    routingMode: RuleRoutingMode,
+    skipRuleId?: string
+  ) => string;
+  withAbTestMetadata: (
+    metadata: Record<string, unknown>,
+    abMetadata: Record<string, unknown>
+  ) => Record<string, unknown>;
+  buildAbTestMetadata: (abTestResolution: any, payload: Record<string, unknown>) => Record<string, unknown>;
+  listWorkScenarios: (db: any, options: { includeDisabled: boolean }) => Promise<any[]>;
+  matchWorkScenarioService: (env: any, content: string, scenarios: any[]) => Promise<any>;
+  extractDirectStructuredToolCall: (content: string) => { tool: WorkerToolName; args: Record<string, unknown> } | null;
+  resolveDriverLookup: (db: any, query: string) => Promise<any>;
+  resolveVehicleLookup: (db: any, query: string) => Promise<any>;
+  resolveRouteLookup: (db: any, query: string) => Promise<any>;
+  resolveIncidentLookup: (db: any, query: string) => Promise<any>;
+  runWorkerWithTools: (
+    env: any,
+    workerTool: WorkerToolName,
+    userQuery: string,
+    isStream?: boolean,
+    toolProvider?: any,
+    historyMessages?: HistoryMessage[]
+  ) => Promise<{ content: string | ReadableStream; metadata?: Record<string, unknown> }>;
+  createToolProvider: (env: any) => ToolProvider;
+  createScopedToolProvider: (
+    baseProvider: ToolProvider,
+    tools: Record<string, (args: Record<string, unknown>) => ToolResult | Promise<ToolResult>>,
+    allowList?: Set<string>
+  ) => ToolProvider;
+  getLatestAssistantRoutingContext: (db: any, sessionId: string) => Promise<any>;
+  getLatestStructuredReportSource: (value: any) => StructuredReportWorkerToolName | null;
+  getLatestStructuredReportFailureSource: (value: any) => StructuredReportWorkerToolName | null;
+  isStructuredReportFollowUpQuery: (content: string) => boolean;
+  buildStructuredReportFollowUpPrompt: (
+    sourceTool: StructuredReportWorkerToolName,
+    userQuery: string
+  ) => string;
+  looksLikeDriverReportRequest: (content: string) => boolean;
+  buildDriverMissingInfoReply: () => string;
+  looksLikeVehicleReportRequest: (content: string) => boolean;
+  buildVehicleMissingInfoReply: () => string;
+  looksLikeRouteReportRequest: (content: string) => boolean;
+  buildRouteMissingInfoReply: () => string;
+  looksLikeAccidentInvestigationReportRequest: (content: string) => boolean;
+  buildAccidentMissingInfoReply: () => string;
+  validateToolCall: (
+    toolCall: { tool: WorkerToolName; args: Record<string, unknown> }
+  ) => { ok: true } | { ok: false; prompt: string };
+  renderScenarioTableForPrompt: (candidates: any[], totalCount: number) => string;
+  callOpenAIRouter: (
+    env: any,
+    options: {
+      model: string;
+      temperature?: number;
+      messages: ChatCompletionMessage[];
+      toolAllowList?: any;
+    }
+  ) => Promise<{ content?: string; toolCall?: { id: string; tool: string; args: Record<string, unknown> } }>;
+  isRoutableWorkerToolName: (value: string) => boolean;
+  extractRuleIdFromRuleReplyArgs: (args: Record<string, unknown>) => string;
+  buildDriverLookupReply: (resolution: any) => string;
+  buildVehicleLookupReply: (resolution: any) => string;
+  buildRouteLookupReply: (resolution: any) => string;
+  buildIncidentLookupReply: (resolution: any) => string;
+  buildDriverLookupWorkerPrompt: (resolution: any) => string;
+  buildVehicleLookupWorkerPrompt: (resolution: any) => string;
+  buildRouteLookupWorkerPrompt: (resolution: any) => string;
+  buildIncidentLookupWorkerPrompt: (resolution: any) => string;
+  buildPendingStructuredLookupState: (tool: StructuredLookupToolName, resolution: any) => Record<string, unknown> | null;
+  buildMissingStructuredLookupState: (tool: StructuredLookupToolName) => Record<string, unknown>;
+  getStructuredLookupSummary: (tool: StructuredLookupToolName, resolution: any) => Record<string, unknown>;
+}
+
+const VEHICLE_META_TOOL_ALLOW_LIST = [
+  'query_data',
+  'get_mcp_base_odsJituanBsBus_list',
+  'get_mcp_base_odsJituanBsBus_useNatureCount',
+  'get_mcp_base_odsJituanBsBus_vehicleTypelist',
+] as const;
+
+function looksLikeVehicleMetaQuery(content: string): boolean {
+  const normalized = content.trim();
+  if (!normalized) return false;
+  return (
+    /(车辆类型|车型|使用性质|用车性质|vehicle\s*type|bus\s*type|use\s*nature|统计|分组|列表)/i.test(
+      normalized
+    ) || /(哪些车辆|哪些车|所有车辆|全部车辆|车辆列表)/i.test(normalized)
+  );
+}
+
+function buildVehicleMetaWorkerPrompt(userQuery: string): string {
+  return [
+    '你当前处理的是“车辆元数据/统计”查询。',
+    '- 这不是单车安全报告问题。',
+    '- 优先选择与问题最匹配、最具体的工具。',
+    '- 车队级“车辆类型/类别”问题，优先使用 get_mcp_base_odsJituanBsBus_vehicleTypelist。',
+    '- 车队级“使用性质/统计”问题，优先使用 get_mcp_base_odsJituanBsBus_useNatureCount。',
+    '- 车队级“车辆列表”问题，优先使用 get_mcp_base_odsJituanBsBus_list。',
+    '- 单车属性问题，才使用 query_data 查询 vehicle，并先拿到准确车辆记录。',
+    '- 不能用 query_data 的 list/search 结果去推断分组统计、车辆类型或使用性质。',
+    '- 不能把车辆实例当成车辆类型。',
+    '- 如果工具 schema 本身不适配当前问题，要直接说明限制，不要编造结果。',
+    '- 始终使用用户当前消息的语言回复。',
+    '',
+    `用户问题：${userQuery}`,
+  ].join('\n');
+}
+
+function containsVehicleIdentifier(content: string): boolean {
+  const normalized = content.trim();
+  if (!normalized) return false;
+  return (
+    /(?:[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{4,5})/i.test(
+      normalized
+    ) ||
+    /\b(?:vehicle|bus)[-_]?\d{2,}\b/i.test(normalized) ||
+    /(?:车辆ID|自编号|车牌号)\s*[:：]?\s*[A-Za-z0-9-]{2,}/i.test(normalized)
+  );
+}
+
+function looksLikeVehicleDomainQuery(content: string): boolean {
+  const normalized = content.trim();
+  if (!normalized) return false;
+  if (containsVehicleIdentifier(normalized)) {
+    return true;
+  }
+  const vehicleKeywords =
+    /(车辆|车牌|单车|车号|整车|车机|车况|车辆ID|自编号|故障|报警|告警|维保|维修|保养|工单|电池|电机|制动|刹车|轮胎|胎压|能耗|续航|充电|绝缘|DCDC|冷却|动力系统|里程|车载)/i;
+  const vehicleAnalysisKeywords =
+    /(风险|分析|解释|原因|归因|画像|报告|状态|异常|整改|建议|趋势|明细|记录|查询)/i;
+  if (vehicleKeywords.test(normalized) && vehicleAnalysisKeywords.test(normalized)) {
+    return true;
+  }
+  return looksLikeVehicleMetaQuery(normalized);
+}
+
+export function createRouteRequestHandler(deps: RouteRequestDeps) {
+  async function routeRequest(
+    env: any,
+    content: string,
+    historyMessages: HistoryMessage[] = [],
+    options: RouteRequestOptions
+  ): Promise<{ content: string | ReadableStream; metadata?: Record<string, unknown> }> {
+    const routingMode = options.routingMode;
+    const abTestResolution = options.abTestResolution;
+    const vehicleExpertEnabled =
+      abTestResolution.group === 'Y' && abTestResolution.source !== 'legacy';
+    let blockedRuleId = typeof options.skipRuleId === 'string' ? options.skipRuleId.trim() : '';
+    let ruleExitFallbackTriggered = Boolean(options.ruleExitFallback);
+
+    const ruleMatchContext = await deps.precomputeRuleMatchContext(env, content);
+    const topScore =
+      typeof ruleMatchContext.matches?.[0]?.score === 'number'
+        ? ruleMatchContext.matches[0].score
+        : undefined;
+    const ruleMatchPrompt = deps.renderRuleMatchForPrompt(
+      ruleMatchContext,
+      routingMode,
+      blockedRuleId || undefined
+    );
+    const ruleMatchMeta = {
+      ok: ruleMatchContext.ok,
+      total_matched: Array.isArray(ruleMatchContext.matches) ? ruleMatchContext.matches.length : 0,
+      top: ruleMatchContext.matches?.[0]
+        ? {
+            rule_id: ruleMatchContext.matches[0].rule_id,
+            rule_name: ruleMatchContext.matches[0].rule_name,
+            score: ruleMatchContext.matches[0].score,
+          }
+        : undefined,
+      error: ruleMatchContext.ok ? undefined : ruleMatchContext.error,
+    };
+
+    const withRouterAbMetadata = (
+      metadata: Record<string, unknown>,
+      selectedTool: string | null,
+      selectedRuleId?: string | null,
+      overrideRuleExitFallback?: boolean
+    ): Record<string, unknown> => {
+      return deps.withAbTestMetadata(
+        metadata,
+        deps.buildAbTestMetadata(abTestResolution, {
+          topScore,
+          selectedTool,
+          selectedRuleId: selectedRuleId ?? null,
+          ruleExitFallback:
+            typeof overrideRuleExitFallback === 'boolean'
+              ? overrideRuleExitFallback
+              : ruleExitFallbackTriggered,
+          skipRuleId: blockedRuleId || undefined,
+        })
+      );
+    };
+
+    const mergeRoutingMetadata = (
+      metadata: Record<string, unknown>,
+      routing: {
+        vehicleDomainDetected: boolean;
+        resolvedAgent: string;
+        expertExit: boolean;
+      }
+    ): Record<string, unknown> => ({
+      ...metadata,
+      routing: {
+        ...(metadata.routing && typeof metadata.routing === 'object' && !Array.isArray(metadata.routing)
+          ? (metadata.routing as Record<string, unknown>)
+          : {}),
+        vehicle_domain_detected: routing.vehicleDomainDetected,
+        resolved_agent: routing.resolvedAgent,
+        expert_exit: routing.expertExit,
+      },
+    });
+
+    const runVehicleAwareConsult = async (params: {
+      prompt: string;
+      vehicleDomainDetected: boolean;
+      metadata: Record<string, unknown>;
+      selectedRuleId?: string | null;
+      toolProvider?: ToolProvider;
+    }): Promise<{ content: string | ReadableStream; metadata: Record<string, unknown> }> => {
+      const shouldUseVehicleExpert = vehicleExpertEnabled && params.vehicleDomainDetected;
+      const runOmni = async (expertExit: boolean) => {
+        const omniOutput = await deps.runWorkerWithTools(
+          env,
+          'consult_omni',
+          params.prompt,
+          options.isStream ?? false,
+          params.toolProvider,
+          historyMessages
+        );
+        return {
+          ...omniOutput,
+          metadata: withRouterAbMetadata(
+            mergeRoutingMetadata(
+              {
+                ...omniOutput.metadata,
+                ...params.metadata,
+              },
+              {
+                vehicleDomainDetected: params.vehicleDomainDetected,
+                resolvedAgent: 'omni',
+                expertExit,
+              }
+            ),
+            'consult_omni',
+            params.selectedRuleId ?? null
+          ),
+        };
+      };
+
+      if (!shouldUseVehicleExpert) {
+        return runOmni(false);
+      }
+
+      const expertOutput = await deps.runWorkerWithTools(
+        env,
+        'consult_vehicle_expert',
+        params.prompt,
+        options.isStream ?? false,
+        params.toolProvider,
+        historyMessages
+      );
+      if (expertOutput.metadata?.rule_exit) {
+        return runOmni(true);
+      }
+      return {
+        ...expertOutput,
+        metadata: withRouterAbMetadata(
+          mergeRoutingMetadata(
+            {
+              ...expertOutput.metadata,
+              ...params.metadata,
+            },
+            {
+              vehicleDomainDetected: true,
+              resolvedAgent: 'vehicle_expert',
+              expertExit: false,
+            }
+          ),
+          'consult_vehicle_expert',
+          params.selectedRuleId ?? null
+        ),
+      };
+    };
+
+    const scenarios = await deps.listWorkScenarios(env.DB, { includeDisabled: false });
+    if (!scenarios.length) {
+      return {
+        content: 'No work scenarios configured yet; cannot process this request.',
+        metadata: withRouterAbMetadata(
+          { scenario: { matched: false, reason: 'empty' }, rule_match: ruleMatchMeta },
+          null
+        ),
+      };
+    }
+
+    const scenarioMatch = await deps.matchWorkScenarioService(env, content, scenarios);
+
+    if (!scenarioMatch.candidates.length) {
+      return {
+        content: 'No available work scenario candidates at this time.',
+        metadata: withRouterAbMetadata(
+          {
+            scenario: { matched: false, reason: 'no_candidates', method: scenarioMatch.method },
+            rule_match: ruleMatchMeta,
+          },
+          null
+        ),
+      };
+    }
+
+    const scenarioMeta = {
+      method: scenarioMatch.method,
+      candidates_count: scenarioMatch.candidates.length,
+      best_score: scenarioMatch.best?.score,
+    };
+    const directToolCall = deps.extractDirectStructuredToolCall(content);
+    const isVehicleReportRequest = deps.looksLikeVehicleReportRequest(content);
+    const vehicleMetaQuery = looksLikeVehicleMetaQuery(content);
+    const structuredLookupTools = new Set<StructuredLookupToolName>([
+      'generate_driver_report',
+      'generate_vehicle_report',
+      'generate_route_report',
+      'generate_accident_investigation_report',
+    ]);
+    const buildShortcutScenarioMeta = () => ({
+      ...scenarioMeta,
+      matched: true,
+      shortcut: true,
+      scenario_id: scenarioMatch.best?.scenario.id,
+      scenario_name: scenarioMatch.best?.scenario.name,
+      score: scenarioMatch.best?.score,
+    });
+    const routerToolUsages: ToolUsage[] = [];
+
+    const handleDriverReportResolution = async (
+      driverNameRaw: string,
+      selectedRuleId?: string | null
+    ): Promise<{ content: string | ReadableStream; metadata: Record<string, unknown> }> => {
+      const driverResolution = await deps.resolveDriverLookup(env.DB, driverNameRaw);
+      if (driverResolution.kind === 'resolved') {
+        const resolvedDriverName = driverResolution.candidate.name;
+        const resolvedDriverIdentifier = driverResolution.candidate.identifier;
+        const workerPrompt =
+          resolvedDriverIdentifier && resolvedDriverIdentifier.trim()
+            ? `请生成驾驶员「${resolvedDriverName}」的安全报告。
+已确认目标驾驶员为：姓名「${resolvedDriverName}」，工号「${resolvedDriverIdentifier}」。
+你可以使用 query_data 工具查询数据：
+1. 先用 query_data(action: "describe", entity_type: "driver") 了解数据结构
+2. 优先用 query_data(action: "get", entity_type: "driver", entity_id: "${resolvedDriverIdentifier}") 获取该驾驶员详细数据
+3. 若工号未命中，再用姓名 "${resolvedDriverName}" 重试 get
+4. 严格按技能模板输出 JSON，尤其是“二、核心风险研判”必须逐条写明“第一/第二/第三/第四”，并包含“其中风险值最高的基础指标是”；若没有基础指标达到阈值，也要基于现有数据继续推理，不要省略`
+            : buildWorkerPrompt({
+                tool: 'generate_driver_report',
+                args: { driver_name: resolvedDriverName },
+              });
+        const toolOutput = await deps.runWorkerWithTools(
+          env,
+          'generate_driver_report',
+          workerPrompt,
+          options.isStream ?? false,
+          undefined,
+          historyMessages
+        );
+        return {
+          ...toolOutput,
+          metadata: withRouterAbMetadata(
+            {
+              ...toolOutput.metadata,
+              driver_lookup: {
+                kind: driverResolution.kind,
+                query: driverResolution.query,
+                match_type: driverResolution.matchType,
+                candidate: driverResolution.candidate,
+              },
+              scenario: {
+                ...scenarioMeta,
+                matched: true,
+                shortcut: true,
+                scenario_id: scenarioMatch.best?.scenario.id,
+                scenario_name: scenarioMatch.best?.scenario.name,
+                score: scenarioMatch.best?.score,
+              },
+              rule_match: ruleMatchMeta,
+            },
+            'generate_driver_report',
+            selectedRuleId ?? null
+          ),
+        };
+      }
+
+      return {
+        content: deps.buildDriverLookupReply(driverResolution),
+        metadata: withRouterAbMetadata(
+          {
+            driver_lookup: {
+              kind: driverResolution.kind,
+              query: driverResolution.query,
+              reason: driverResolution.reason,
+              candidates: driverResolution.candidates,
+            },
+            pending_structured_lookup: deps.buildPendingStructuredLookupState(
+              'generate_driver_report',
+              driverResolution
+            ),
+            scenario: {
+              ...scenarioMeta,
+              matched: true,
+              shortcut: true,
+              scenario_id: scenarioMatch.best?.scenario.id,
+              scenario_name: scenarioMatch.best?.scenario.name,
+              score: scenarioMatch.best?.score,
+            },
+            rule_match: ruleMatchMeta,
+          },
+          null,
+          selectedRuleId ?? null
+        ),
+      };
+    };
+
+    const handleVehicleReportResolution = async (
+      vehicleIdRaw: string,
+      selectedRuleId?: string | null
+    ): Promise<{ content: string | ReadableStream; metadata: Record<string, unknown> }> => {
+      const vehicleResolution = await deps.resolveVehicleLookup(env.DB, vehicleIdRaw);
+      if (vehicleResolution.kind === 'resolved') {
+        const resolvedPlateNumber =
+          String(
+            readFirstStringAtPaths(vehicleResolution.data, ['basic.plate_number']) ??
+              vehicleResolution.candidate.identifier ??
+              vehicleResolution.candidate.name
+          ).trim() || vehicleResolution.candidate.name;
+        const resolvedVehicleId =
+          String(
+            readFirstStringAtPaths(vehicleResolution.data, [
+              'basic.vehicle_id',
+              'id',
+              'identifier',
+            ]) ??
+              vehicleResolution.candidate.identifier ??
+              vehicleResolution.candidate.name
+          ).trim() || vehicleResolution.candidate.name;
+        const workerPrompt = `请生成车辆「${resolvedPlateNumber}」的安全报告。
+已确认目标车辆为：车牌号「${resolvedPlateNumber}」，车辆ID「${resolvedVehicleId}」。
+你可以使用 query_data 工具查询数据：
+1. 先用 query_data(action: "describe", entity_type: "vehicle") 了解数据结构
+2. 优先用 query_data(action: "get", entity_type: "vehicle", entity_id: "${resolvedVehicleId}") 获取车辆详细数据
+3. 若车辆ID未命中，再用车牌号 "${resolvedPlateNumber}" 重试 get
+4. 严格按技能模板输出 JSON，最终一级指标只能是“综合风险 / 故障风险 / 能耗风险”
+5. 只能基于已确认命中的车辆数据生成报告；若缺少直接报警指标/次数，继续做结构化分析，但不要伪造次数`;
+        const toolOutput = await deps.runWorkerWithTools(
+          env,
+          'generate_vehicle_report',
+          workerPrompt,
+          options.isStream ?? false,
+          undefined,
+          historyMessages
+        );
+        return {
+          ...toolOutput,
+          metadata: withRouterAbMetadata(
+            {
+              ...toolOutput.metadata,
+              vehicle_lookup: {
+                kind: vehicleResolution.kind,
+                query: vehicleResolution.query,
+                match_type: vehicleResolution.matchType,
+                candidate: vehicleResolution.candidate,
+              },
+              scenario: {
+                ...scenarioMeta,
+                matched: true,
+                shortcut: true,
+                scenario_id: scenarioMatch.best?.scenario.id,
+                scenario_name: scenarioMatch.best?.scenario.name,
+                score: scenarioMatch.best?.score,
+              },
+              rule_match: ruleMatchMeta,
+            },
+            'generate_vehicle_report',
+            selectedRuleId ?? null
+          ),
+        };
+      }
+
+      return {
+        content: deps.buildVehicleLookupReply(vehicleResolution),
+        metadata: withRouterAbMetadata(
+          {
+            vehicle_lookup: {
+              kind: vehicleResolution.kind,
+              query: vehicleResolution.query,
+              reason: vehicleResolution.reason,
+              candidates: vehicleResolution.candidates,
+            },
+            pending_structured_lookup: deps.buildPendingStructuredLookupState(
+              'generate_vehicle_report',
+              vehicleResolution
+            ),
+            scenario: {
+              ...scenarioMeta,
+              matched: true,
+              shortcut: true,
+              scenario_id: scenarioMatch.best?.scenario.id,
+              scenario_name: scenarioMatch.best?.scenario.name,
+              score: scenarioMatch.best?.score,
+            },
+            rule_match: ruleMatchMeta,
+          },
+          null,
+          selectedRuleId ?? null
+        ),
+      };
+    };
+
+    const handleRouteReportResolution = async (
+      routeNameRaw: string,
+      selectedRuleId?: string | null
+    ): Promise<{ content: string | ReadableStream; metadata: Record<string, unknown> }> => {
+      const routeResolution = await deps.resolveRouteLookup(env.DB, routeNameRaw);
+      if (routeResolution.kind === 'resolved') {
+        const toolOutput = await deps.runWorkerWithTools(
+          env,
+          'generate_route_report',
+          deps.buildRouteLookupWorkerPrompt(routeResolution),
+          options.isStream ?? false,
+          undefined,
+          historyMessages
+        );
+        return {
+          ...toolOutput,
+          metadata: withRouterAbMetadata(
+            {
+              ...toolOutput.metadata,
+              route_lookup: deps.getStructuredLookupSummary('generate_route_report', routeResolution),
+              scenario: buildShortcutScenarioMeta(),
+              rule_match: ruleMatchMeta,
+            },
+            'generate_route_report',
+            selectedRuleId ?? null
+          ),
+        };
+      }
+
+      return {
+        content: deps.buildRouteLookupReply(routeResolution),
+        metadata: withRouterAbMetadata(
+          {
+            route_lookup: deps.getStructuredLookupSummary('generate_route_report', routeResolution),
+            pending_structured_lookup: deps.buildPendingStructuredLookupState(
+              'generate_route_report',
+              routeResolution
+            ),
+            scenario: buildShortcutScenarioMeta(),
+            rule_match: ruleMatchMeta,
+          },
+          null,
+          selectedRuleId ?? null
+        ),
+      };
+    };
+
+    const handleIncidentReportResolution = async (
+      incidentIdRaw: string,
+      selectedRuleId?: string | null
+    ): Promise<{ content: string | ReadableStream; metadata: Record<string, unknown> }> => {
+      const incidentResolution = await deps.resolveIncidentLookup(env.DB, incidentIdRaw);
+      if (incidentResolution.kind === 'resolved') {
+        const toolOutput = await deps.runWorkerWithTools(
+          env,
+          'generate_accident_investigation_report',
+          deps.buildIncidentLookupWorkerPrompt(incidentResolution),
+          options.isStream ?? false,
+          undefined,
+          historyMessages
+        );
+        return {
+          ...toolOutput,
+          metadata: withRouterAbMetadata(
+            {
+              ...toolOutput.metadata,
+              incident_lookup: deps.getStructuredLookupSummary(
+                'generate_accident_investigation_report',
+                incidentResolution
+              ),
+              scenario: buildShortcutScenarioMeta(),
+              rule_match: ruleMatchMeta,
+            },
+            'generate_accident_investigation_report',
+            selectedRuleId ?? null
+          ),
+        };
+      }
+
+      return {
+        content: deps.buildIncidentLookupReply(incidentResolution),
+        metadata: withRouterAbMetadata(
+          {
+            incident_lookup: deps.getStructuredLookupSummary(
+              'generate_accident_investigation_report',
+              incidentResolution
+            ),
+            pending_structured_lookup: deps.buildPendingStructuredLookupState(
+              'generate_accident_investigation_report',
+              incidentResolution
+            ),
+            scenario: buildShortcutScenarioMeta(),
+            rule_match: ruleMatchMeta,
+          },
+          null,
+          selectedRuleId ?? null
+        ),
+      };
+    };
+
+    const handleVehicleMetaQuery = async (
+      selectedToolName?: string | null,
+      selectedRuleId?: string | null
+    ): Promise<{ content: string | ReadableStream; metadata: Record<string, unknown> }> => {
+      const baseProvider = deps.createToolProvider(env);
+      const scopedProvider = deps.createScopedToolProvider(
+        baseProvider,
+        {},
+        new Set(VEHICLE_META_TOOL_ALLOW_LIST)
+      );
+      return runVehicleAwareConsult({
+        prompt: buildVehicleMetaWorkerPrompt(content),
+        vehicleDomainDetected: true,
+        toolProvider: scopedProvider,
+        selectedRuleId,
+        metadata: {
+          scenario: buildShortcutScenarioMeta(),
+          rule_match: ruleMatchMeta,
+          vehicle_meta_query: true,
+          vehicle_meta_tool_allow_list: [...VEHICLE_META_TOOL_ALLOW_LIST],
+          router_bypassed_for_vehicle_meta_query: !selectedToolName,
+          ...(selectedToolName ? { router_selected_tool: selectedToolName } : {}),
+          ...(routerToolUsages.length ? { router_tools: routerToolUsages } : {}),
+        },
+      });
+    };
+
+    const latestRoutingContext = options.sessionId
+      ? await deps.getLatestAssistantRoutingContext(env.DB, options.sessionId)
+      : null;
+    const latestStructuredReportSource = deps.getLatestStructuredReportSource(latestRoutingContext);
+    const latestStructuredReportFailureSource =
+      deps.getLatestStructuredReportFailureSource(latestRoutingContext);
+
+    if (
+      !directToolCall &&
+      latestStructuredReportFailureSource &&
+      deps.isStructuredReportFollowUpQuery(content)
+    ) {
+      const reportLabelMap: Record<StructuredReportWorkerToolName, string> = {
+        generate_driver_report: '驾驶员报告',
+        generate_vehicle_report: '车辆报告',
+        generate_route_report: '线路报告',
+        generate_accident_investigation_report: '事故调查报告',
+      };
+      return {
+        content: `上一轮${reportLabelMap[latestStructuredReportFailureSource]}未成功生成，当前没有可继续追问的报告内容。请先重新生成报告，或直接提供更具体的对象标识后再继续。`,
+        metadata: withRouterAbMetadata(
+          { scenario: scenarioMeta, rule_match: ruleMatchMeta },
+          null
+        ),
+      };
+    }
+
+    if (
+      !directToolCall &&
+      latestStructuredReportSource &&
+      deps.isStructuredReportFollowUpQuery(content)
+    ) {
+      return runVehicleAwareConsult({
+        prompt: deps.buildStructuredReportFollowUpPrompt(latestStructuredReportSource, content),
+        vehicleDomainDetected: latestStructuredReportSource === 'generate_vehicle_report',
+        metadata: {
+          report_follow_up: {
+            kind: 'structured_report_follow_up',
+            source_tool: latestStructuredReportSource,
+          },
+          scenario: {
+            ...scenarioMeta,
+            matched: true,
+            shortcut: true,
+            scenario_id: scenarioMatch.best?.scenario.id,
+            scenario_name: scenarioMatch.best?.scenario.name,
+            score: scenarioMatch.best?.score,
+          },
+          rule_match: ruleMatchMeta,
+        },
+      });
+    }
+
+    if (!directToolCall && vehicleMetaQuery && !isVehicleReportRequest) {
+      return handleVehicleMetaQuery();
+    }
+
+    if (!directToolCall && deps.looksLikeDriverReportRequest(content)) {
+      const pendingState = deps.buildMissingStructuredLookupState('generate_driver_report');
+      return {
+        content: deps.buildDriverMissingInfoReply(),
+        metadata: withRouterAbMetadata(
+          {
+            driver_lookup: {
+              kind: 'clarify',
+              query: '',
+              reason: 'missing_name',
+              candidates: [],
+            },
+            pending_structured_lookup: pendingState,
+            scenario: {
+              ...scenarioMeta,
+              matched: true,
+              shortcut: true,
+              scenario_id: scenarioMatch.best?.scenario.id,
+              scenario_name: scenarioMatch.best?.scenario.name,
+              score: scenarioMatch.best?.score,
+            },
+            rule_match: ruleMatchMeta,
+          },
+          null
+        ),
+      };
+    }
+
+    if (!directToolCall && isVehicleReportRequest) {
+      const pendingState = deps.buildMissingStructuredLookupState('generate_vehicle_report');
+      return {
+        content: deps.buildVehicleMissingInfoReply(),
+        metadata: withRouterAbMetadata(
+          {
+            vehicle_lookup: {
+              kind: 'clarify',
+              query: '',
+              reason: 'missing_vehicle',
+              candidates: [],
+            },
+            pending_structured_lookup: pendingState,
+            scenario: {
+              ...scenarioMeta,
+              matched: true,
+              shortcut: true,
+              scenario_id: scenarioMatch.best?.scenario.id,
+              scenario_name: scenarioMatch.best?.scenario.name,
+              score: scenarioMatch.best?.score,
+            },
+            rule_match: ruleMatchMeta,
+          },
+          null
+        ),
+      };
+    }
+
+    if (!directToolCall && deps.looksLikeAccidentInvestigationReportRequest(content)) {
+      const pendingState = deps.buildMissingStructuredLookupState(
+        'generate_accident_investigation_report'
+      );
+      return {
+        content: deps.buildAccidentMissingInfoReply(),
+        metadata: withRouterAbMetadata(
+          {
+            incident_lookup: {
+              kind: 'clarify',
+              query: '',
+              reason: 'missing_incident',
+              candidates: [],
+            },
+            pending_structured_lookup: pendingState,
+            scenario: {
+              ...scenarioMeta,
+              matched: true,
+              shortcut: true,
+              scenario_id: scenarioMatch.best?.scenario.id,
+              scenario_name: scenarioMatch.best?.scenario.name,
+              score: scenarioMatch.best?.score,
+            },
+            rule_match: ruleMatchMeta,
+          },
+          null
+        ),
+      };
+    }
+
+    if (!directToolCall && deps.looksLikeRouteReportRequest(content)) {
+      const pendingState = deps.buildMissingStructuredLookupState('generate_route_report');
+      return {
+        content: deps.buildRouteMissingInfoReply(),
+        metadata: withRouterAbMetadata(
+          {
+            route_lookup: {
+              kind: 'clarify',
+              query: '',
+              reason: 'missing_route',
+              candidates: [],
+            },
+            pending_structured_lookup: pendingState,
+            scenario: {
+              ...scenarioMeta,
+              matched: true,
+              shortcut: true,
+              scenario_id: scenarioMatch.best?.scenario.id,
+              scenario_name: scenarioMatch.best?.scenario.name,
+              score: scenarioMatch.best?.score,
+            },
+            rule_match: ruleMatchMeta,
+          },
+          null
+        ),
+      };
+    }
+
+    if (directToolCall) {
+      if (directToolCall.tool === 'generate_vehicle_report' && vehicleMetaQuery && !isVehicleReportRequest) {
+        return handleVehicleMetaQuery(directToolCall.tool);
+      }
+      const validation = deps.validateToolCall(directToolCall);
+      if ('prompt' in validation) {
+        const prompt = validation.prompt;
+        return {
+          content: prompt,
+          metadata: withRouterAbMetadata(
+            {
+              scenario: {
+                ...scenarioMeta,
+                matched: true,
+                shortcut: true,
+                scenario_id: scenarioMatch.best?.scenario.id,
+                scenario_name: scenarioMatch.best?.scenario.name,
+                score: scenarioMatch.best?.score,
+              },
+              rule_match: ruleMatchMeta,
+            },
+            structuredLookupTools.has(directToolCall.tool as StructuredLookupToolName)
+              ? null
+              : directToolCall.tool
+          ),
+        };
+      }
+      if (directToolCall.tool === 'generate_driver_report') {
+        return handleDriverReportResolution(String(directToolCall.args.driver_name ?? ''));
+      }
+      if (directToolCall.tool === 'generate_vehicle_report') {
+        return handleVehicleReportResolution(String(directToolCall.args.vehicle_id ?? ''));
+      }
+      if (directToolCall.tool === 'generate_route_report') {
+        return handleRouteReportResolution(String(directToolCall.args.route_name ?? ''));
+      }
+      if (directToolCall.tool === 'generate_accident_investigation_report') {
+        return handleIncidentReportResolution(String(directToolCall.args.incident_id ?? ''));
+      }
+      const toolOutput = await deps.runWorkerWithTools(
+        env,
+        directToolCall.tool,
+        buildWorkerPrompt(directToolCall),
+        options.isStream ?? false,
+        undefined,
+        historyMessages
+      );
+      return {
+        ...toolOutput,
+        metadata: withRouterAbMetadata(
+          {
+            ...toolOutput.metadata,
+            scenario: {
+              ...scenarioMeta,
+              matched: true,
+              shortcut: true,
+              scenario_id: scenarioMatch.best?.scenario.id,
+              scenario_name: scenarioMatch.best?.scenario.name,
+              score: scenarioMatch.best?.score,
+            },
+            rule_match: ruleMatchMeta,
+          },
+          directToolCall.tool
+        ),
+      };
+    }
+
+    const contextMessages = buildContextFromHistory(historyMessages);
+    const scenarioPrompt = deps.renderScenarioTableForPrompt(
+      scenarioMatch.candidates,
+      scenarios.length
+    );
+    const routerMessages: ChatCompletionMessage[] = [
+      {
+        role: 'system',
+        content: `${deps.ROUTER_SKILL}
+
+${ruleMatchPrompt}
+
+${scenarioPrompt}`,
+      },
+      ...contextMessages,
+      { role: 'user', content },
+    ];
+
+    let routerIterations = 0;
+    while (routerIterations < deps.MAX_ROUTER_TOOL_ITERATIONS) {
+      routerIterations += 1;
+      const routerResult = await deps.callOpenAIRouter(env, {
+        model: env.OPENAI_ROUTER_MODEL || env.OPENAI_MODEL || deps.DEFAULT_MODEL,
+        temperature: 0.2,
+        messages: routerMessages,
+        toolAllowList: deps.ROUTER_TOOL_ALLOW_LIST,
+      });
+
+      const toolCall = routerResult.toolCall;
+      if (!toolCall) {
+        return runVehicleAwareConsult({
+          prompt: content,
+          vehicleDomainDetected: looksLikeVehicleDomainQuery(content),
+          metadata: {
+            scenario: scenarioMeta,
+            rule_match: ruleMatchMeta,
+            router_tools: routerToolUsages,
+            router_no_tool_fallback: true,
+          },
+        });
+      }
+
+      routerToolUsages.push({
+        id: toolCall.id,
+        name: toolCall.tool,
+        args: toolCall.args,
+      });
+
+      if (toolCall.tool === 'generate_vehicle_report' && vehicleMetaQuery && !isVehicleReportRequest) {
+        return handleVehicleMetaQuery(toolCall.tool);
+      }
+
+      if (toolCall.tool === 'match_rules') {
+        routerMessages.push({
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: toolCall.id,
+              tool: 'match_rules',
+              args: toolCall.args,
+            },
+          ],
+        });
+        routerMessages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          name: 'match_rules',
+          content: JSON.stringify(ruleMatchContext.toolResult, null, 2),
+        });
+        continue;
+      }
+
+      if (!deps.isRoutableWorkerToolName(toolCall.tool)) {
+        return {
+          content: 'Blocked tool call.',
+          metadata: withRouterAbMetadata(
+            {
+              scenario: scenarioMeta,
+              blocked_tool: toolCall.tool,
+              rule_match: ruleMatchMeta,
+              router_tools: routerToolUsages,
+            },
+            toolCall.tool
+          ),
+        };
+      }
+
+      const nextArgs = { ...toolCall.args };
+      if (toolCall.tool === 'rule_reply' && !nextArgs.user_query) {
+        nextArgs.user_query = content;
+      }
+
+      const selectedRuleId =
+        toolCall.tool === 'rule_reply' ? deps.extractRuleIdFromRuleReplyArgs(nextArgs) : '';
+
+      if (
+        toolCall.tool === 'rule_reply' &&
+        blockedRuleId &&
+        selectedRuleId &&
+        selectedRuleId === blockedRuleId
+      ) {
+        routerMessages.push({
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: toolCall.id,
+              tool: 'rule_reply',
+              args: nextArgs,
+            },
+          ],
+        });
+        routerMessages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          name: 'rule_reply',
+          content: JSON.stringify(
+            {
+              success: false,
+              error: `rule_reply for rule_id=${blockedRuleId} is blocked for this turn`,
+            },
+            null,
+            2
+          ),
+        });
+        continue;
+      }
+
+      const validation = deps.validateToolCall({
+        tool: toolCall.tool as WorkerToolName,
+        args: nextArgs,
+      });
+      if ('prompt' in validation) {
+        const prompt = validation.prompt;
+        return {
+          content: prompt,
+          metadata: withRouterAbMetadata(
+            { scenario: scenarioMeta, rule_match: ruleMatchMeta, router_tools: routerToolUsages },
+            structuredLookupTools.has(toolCall.tool as StructuredLookupToolName)
+              ? null
+              : toolCall.tool,
+            selectedRuleId || null
+          ),
+        };
+      }
+
+      if (toolCall.tool === 'generate_driver_report') {
+        return handleDriverReportResolution(
+          String(nextArgs.driver_name ?? ''),
+          selectedRuleId || null
+        );
+      }
+
+      if (toolCall.tool === 'generate_vehicle_report') {
+        return handleVehicleReportResolution(
+          String(nextArgs.vehicle_id ?? ''),
+          selectedRuleId || null
+        );
+      }
+
+      if (toolCall.tool === 'generate_route_report') {
+        return handleRouteReportResolution(String(nextArgs.route_name ?? ''), selectedRuleId || null);
+      }
+
+      if (toolCall.tool === 'generate_accident_investigation_report') {
+        return handleIncidentReportResolution(
+          String(nextArgs.incident_id ?? ''),
+          selectedRuleId || null
+        );
+      }
+
+      if (toolCall.tool === 'consult_omni') {
+        return runVehicleAwareConsult({
+          prompt: buildWorkerPrompt({ tool: 'consult_omni', args: nextArgs }),
+          vehicleDomainDetected: looksLikeVehicleDomainQuery(content),
+          selectedRuleId: selectedRuleId || null,
+          metadata: {
+            scenario: {
+              ...scenarioMeta,
+              matched: true,
+              scenario_id: scenarioMatch.best?.scenario.id,
+              scenario_name: scenarioMatch.best?.scenario.name,
+              score: scenarioMatch.best?.score,
+            },
+            rule_match: ruleMatchMeta,
+            router_tools: routerToolUsages,
+          },
+        });
+      }
+
+      const toolOutput = await deps.runWorkerWithTools(
+        env,
+        toolCall.tool as WorkerToolName,
+        buildWorkerPrompt({ tool: toolCall.tool as WorkerToolName, args: nextArgs }),
+        options.isStream ?? false
+      );
+
+      const isRuleReply = toolCall.tool === 'rule_reply';
+
+      if (isRuleReply && toolOutput.metadata?.rule_exit) {
+        ruleExitFallbackTriggered = true;
+        if (selectedRuleId) {
+          blockedRuleId = selectedRuleId;
+        }
+
+        routerMessages.push({
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: toolCall.id,
+              tool: 'rule_reply',
+              args: nextArgs,
+            },
+          ],
+        });
+        routerMessages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          name: 'rule_reply',
+          content: JSON.stringify(
+            {
+              success: false,
+              error: 'rule_exit_triggered',
+              data: {
+                reason: toolOutput.metadata?.reason,
+                confidence: toolOutput.metadata?.confidence,
+                blocked_rule_id: blockedRuleId || null,
+              },
+            },
+            null,
+            2
+          ),
+        });
+
+        if (blockedRuleId) {
+          routerMessages.push({
+            role: 'system',
+            content: `[RULE_EXIT_GUARD] You must NOT call rule_reply with rule_id "${blockedRuleId}" again in this turn.`,
+          });
+        }
+        continue;
+      }
+
+      const bestScenario = scenarioMatch.best;
+
+      return {
+        ...toolOutput,
+        metadata: withRouterAbMetadata(
+          {
+            ...toolOutput.metadata,
+            router_tools: routerToolUsages,
+            scenario: {
+              ...scenarioMeta,
+              matched: true,
+              scenario_id: bestScenario?.scenario.id,
+              scenario_name: bestScenario?.scenario.name,
+              score: bestScenario?.score,
+            },
+            rule_match: ruleMatchMeta,
+          },
+          toolCall.tool,
+          selectedRuleId || null
+        ),
+      };
+    }
+
+    return {
+      content: 'Router exceeded max tool iterations.',
+      metadata: withRouterAbMetadata(
+        {
+          scenario: scenarioMeta,
+          error: 'router_max_iterations',
+          rule_match: ruleMatchMeta,
+          router_tools: routerToolUsages,
+        },
+        null,
+        null,
+        ruleExitFallbackTriggered
+      ),
+    };
+  }
+
+  return { routeRequest };
+}

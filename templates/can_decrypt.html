@@ -1,0 +1,97 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CAN 数据解码器</title>
+</head>
+<body>
+  <form id="form-can">
+    <div id="can">{{ cans.can }}</div>
+    <div id="obuid">{{ cans.obuid }}</div>
+      <div id="reporttime">{{ cans.reportTime }}</div>
+      <div id="ppartition">{{ cans.ppartition }}</div>
+    <div id="output"></div>
+    <script src="/media/jquery-3.6.0.min.js"></script>
+    <script src="/media/libCompress.js?v=1" type="text/javascript"></script>
+<script>
+    var pObuidArrayBufer = undefined;
+    var pBase64ArrayBufer = undefined;
+    var pOutJsonArrayBufer = undefined;
+    var pObuidPtr = undefined;
+    var pBase64Ptr = undefined;
+    var pOutJsonPtr = undefined;
+    var bInitSuccess = true;
+    var pHandle = undefined;
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder('utf-8');
+
+    function FnUnCompressCanDataToJson(obuid, base64) {
+        if (!bInitSuccess)
+            return "Not Init Success !!";
+
+        if (!pObuidPtr) {
+            pObuidPtr = _malloc(1024);
+            pBase64Ptr = _malloc(1024 * 1024 * 2);
+            pOutJsonPtr = _malloc(1024 * 1024 * 8);
+            pObuidArrayBufer = new Uint8Array(wasmMemory.buffer, pObuidPtr, 1024);
+            pBase64ArrayBufer = new Uint8Array(wasmMemory.buffer, pBase64Ptr, 1024 * 1024 * 2);
+            pOutJsonArrayBufer = new Uint8Array(wasmMemory.buffer, pOutJsonPtr, 1024 * 1024 * 8);
+        }
+
+        const sObuid = encoder.encode(obuid);
+        const sBase64 = encoder.encode(base64);
+
+        pObuidArrayBufer.set(sObuid);
+        pObuidArrayBufer[sObuid.length] = 0;
+        pBase64ArrayBufer.set(sBase64);
+        pBase64ArrayBufer[sBase64.length] = 0;
+
+        if (!pHandle)
+            pHandle =  _create();
+
+        var out = _unCompressCanDataToJson(pHandle, pObuidPtr, pBase64Ptr, pOutJsonPtr, 1024 * 1024 * 8);
+        if (out === 0)
+            return "Error!";
+
+        return decoder.decode(new Uint8Array(wasmMemory.buffer, pOutJsonPtr, out));
+    }
+
+    Module["onRuntimeInitialized"] = function(){
+        console.log("Init Success");
+        bInitSuccess = true;
+
+        const reporttime = document.getElementById('reporttime').innerHTML;
+        const obuid = document.getElementById('obuid').innerHTML;
+        const can = document.getElementById('can');
+        const ppartition = document.getElementById('ppartition').innerHTML;
+        var json = FnUnCompressCanDataToJson(obuid.innerHTML, can.innerHTML);
+        // 自动提交到后端
+        fetch('/vadmin/analysis/submit-can', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({json: json,reporttime:reporttime,obuid:obuid,ppartition:ppartition})
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log('提交成功:', data);
+            const output = document.getElementById('output');
+            if (output) {
+                output.innerHTML = '<p>'+json+'</p>';
+            }
+        })
+        .catch(error => {
+            console.error('提交失败:', error);
+            const output = document.getElementById('output');
+            if (output) {
+                output.innerHTML = '<p>提交失败</p>';
+            }
+        });
+    }
+</script>
+  </form>
+</body>
+</html>

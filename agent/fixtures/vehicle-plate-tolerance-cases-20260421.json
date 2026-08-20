@@ -1,0 +1,149 @@
+[
+  {
+    "id": "T1-space-between-letter-and-number",
+    "category": "plate_tolerance",
+    "title": "空格：字母与数字间（粤A 02650D）",
+    "turns": [
+      {
+        "prompt": "生成车辆安全报告，车牌 粤A 02650D（中间有空格），日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["02650D", "车辆"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "T2-space-between-prefix-and-letter",
+    "category": "plate_tolerance",
+    "title": "空格：前缀与字母间（粤 A02650D）",
+    "turns": [
+      {
+        "prompt": "生成车辆安全报告，车牌 粤 A02650D（粤和A之间有空格），日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["02650D", "车辆"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "T3-missing-yue-prefix",
+    "category": "plate_tolerance",
+    "title": "缺省前缀粤（A02650D）",
+    "turns": [
+      {
+        "prompt": "生成车辆安全报告，车牌 A02650D（没写粤），日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["02650D"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "T4-lowercase",
+    "category": "plate_tolerance",
+    "title": "大小写混排（粤a02650d全小写）",
+    "turns": [
+      {
+        "prompt": "生成车辆安全报告，车牌 粤a02650d（全小写），日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["02650", "车辆"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "T5-separator-dash",
+    "category": "plate_tolerance",
+    "title": "分隔符：横杠（粤A-02650-D）",
+    "turns": [
+      {
+        "prompt": "生成车辆安全报告，车牌 粤A-02650-D（横杠分隔），日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["02650", "车辆"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "T6-colloquial-split",
+    "category": "plate_tolerance",
+    "title": "口语拆分：分开说前缀和号码",
+    "turns": [
+      {
+        "prompt": "帮我生成车辆安全报告，车牌号前缀是粤A，号码部分是02013D，日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["02013D", "车辆"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "T7-multi-space-plus-date",
+    "category": "plate_tolerance",
+    "title": "多处空格+日期口语",
+    "turns": [
+      {
+        "prompt": "车牌 粤 A 02013 D（多处空格），要看车辆安全总结报告，时间 2025年12月21号。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["02013", "车辆"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "T8-yueE-prefix-no-data",
+    "category": "plate_tolerance",
+    "title": "粤E前缀（demo无数据）",
+    "turns": [
+      {
+        "prompt": "生成车辆安全报告，车牌 粤E01842D，日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "T9-only-bus-code",
+    "category": "plate_tolerance",
+    "title": "只给自编号（E42980）",
+    "turns": [
+      {
+        "prompt": "生成车辆安全报告，车辆自编号 E42980，日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "T10-incomplete-plate-no-yue-no-D",
+    "category": "plate_tolerance",
+    "title": "不完整车牌（A02013，无粤无D）",
+    "turns": [
+      {
+        "prompt": "生成车辆安全报告，车牌是 A02013（只有字母+数字，没粤也没D），日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"]
+        }
+      }
+    ]
+  }
+]

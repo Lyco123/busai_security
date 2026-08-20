@@ -1,0 +1,6 @@
+{
+  "allowFiles": [
+    "agent/scripts/check-mojibake.mjs"
+  ],
+  "allowLineContains": []
+}

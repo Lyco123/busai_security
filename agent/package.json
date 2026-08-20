@@ -1,0 +1,31 @@
+{
+  "name": "bus-agent",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "ab-test:reset": "node ./scripts/reset-ab-test-stats.mjs",
+    "test:assistant-ab-playwright": "node ./scripts/assistant-ab-playwright.mjs",
+    "test:assistant-reliability-playwright": "node ./scripts/assistant-reliability-playwright.mjs",
+    "check:encoding": "node ./scripts/check-encoding.mjs",
+    "check:mojibake": "node ./scripts/check-mojibake.mjs",
+    "check:text": "npm run check:encoding && npm run check:mojibake",
+    "test:report-output-format-contract": "node ./scripts/report-output-format-contract.mjs",
+    "test:report-source-contract": "npm run test:report-output-format-contract",
+    "test:rule-config-regression": "node ./scripts/rule-config-regression.mjs",
+    "test:rule-config-edit-regression": "node ./scripts/rule-config-edit-regression.mjs"
+  },
+  "dependencies": {
+    "jsonrepair": "^3.13.2"
+  },
+  "overrides": {
+    "jsonrepair": "^3.13.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240117.0",
+    "playwright": "^1.58.2",
+    "typescript": "^5.3.3",
+    "wrangler": "^3.0.0"
+  }
+}

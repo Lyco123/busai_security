@@ -1,0 +1,34 @@
+{
+  "test_type": "configuration_granularity",
+  "test_date": "2026-03-15",
+  "configurations": {
+    "ultra_wide": {
+      "categories": [
+        "Vehicle Operations",
+        "Driver Management",
+        "Safety Monitoring",
+        "Maintenance Scheduling"
+      ],
+      "edge_case_handling": "Good for broad queries, may need clarification for specific technical questions"
+    },
+    "medium": {
+      "categories": [
+        "Bus Fleet Management",
+        "Driver Performance Analysis",
+        "Real-time Safety Alerts",
+        "Preventive Maintenance Planning"
+      ],
+      "edge_case_handling": "Excellent balance - handles most edge cases with minimal clarification needed"
+    },
+    "fine": {
+      "categories": [
+        "Battery Health Monitoring",
+        "Driver Safety Scoring",
+        "Brake System Response Analysis",
+        "Oil Change Scheduling"
+      ],
+      "edge_case_handling": "Most precise but requires more maintenance effort"
+    }
+  },
+  "recommendation": "Medium granularity (Configuration B) is recommended for optimal performance and maintainability"
+}

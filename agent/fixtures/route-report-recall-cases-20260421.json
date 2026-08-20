@@ -1,0 +1,172 @@
+[
+  {
+    "id": "R+1-route-summary-management",
+    "category": "should_recall",
+    "title": "线路报告近义：总结/管理视角",
+    "turns": [
+      {
+        "prompt": "527路 这条线路我要一份安全风险分析总结，管理口看的，画像日期 20251221。",
+        "timeout_ms": 120000,
+        "expect": {
+          "tool_in": ["generate_route_report"],
+          "must_contain_any": ["527", "线路", "安全", "风险"],
+          "must_not_contain_any": ["vehicle_id"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R+2-route-colloquial",
+    "category": "should_recall",
+    "title": "线路报告口语化、省略生成",
+    "turns": [
+      {
+        "prompt": "帮我整一下 527 那条线路的安全方面材料，就 20251221 那天档期的。",
+        "timeout_ms": 120000,
+        "expect": {
+          "tool_in": ["generate_route_report"],
+          "must_contain_any": ["527", "线路", "安全"],
+          "must_not_contain_any": ["vehicle_id"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R+3-route-irregular-format",
+    "category": "should_recall",
+    "title": "线路报告不规范：空格/口语日期",
+    "turns": [
+      {
+        "prompt": "线路 5 27（中间有空格），要看线路安全总结报告，时间：2025年12月21号 的画像。",
+        "timeout_ms": 120000,
+        "expect": {
+          "tool_in": ["generate_route_report", "consult_omni"],
+          "must_not_contain_any": ["vehicle_id", "generate_driver_report"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R+4-route-clarify-then-complete",
+    "category": "should_recall",
+    "title": "线路报告多轮澄清后补全",
+    "turns": [
+      {
+        "prompt": "我想看线路管理人员版那种安全总结，你帮我把版式出全。",
+        "timeout_ms": 120000,
+        "expect": {
+          "ask_for_more_info": true,
+          "must_not_contain_any": ["vehicle_id", "generate_vehicle_report"]
+        }
+      },
+      {
+        "prompt": "线路是 527，分区 20251221。",
+        "timeout_ms": 120000,
+        "expect": {
+          "tool_in": ["generate_route_report"],
+          "must_contain_any": ["527", "线路", "安全"],
+          "must_not_contain_any": ["vehicle_id"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R+5-route-bilingual",
+    "category": "should_recall",
+    "title": "线路报告中英混排",
+    "turns": [
+      {
+        "prompt": "Please give me the route safety summary (management) for 527, ppartition=20251221.",
+        "timeout_ms": 120000,
+        "expect": {
+          "tool_in": ["generate_route_report"],
+          "must_contain_any": ["527", "safety", "route"],
+          "must_not_contain_any": ["vehicle_id"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R-1-vehicle-confusion",
+    "category": "should_not_recall",
+    "title": "线路报告不应召回：车辆报告易混",
+    "turns": [
+      {
+        "prompt": "我要 车辆安全风险分析报告，车那侧的，车牌 粤A02650D，日期 20251221。",
+        "timeout_ms": 120000,
+        "expect": {
+          "tool_in": [
+            "generate_vehicle_report",
+            "consult_vehicle_expert",
+            "consult_omni",
+            "generate_driver_report"
+          ],
+          "must_not_contain_any": ["线路"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R-2-no-report-only-archive",
+    "category": "should_not_recall",
+    "title": "线路报告不应召回：不要报告+档案",
+    "turns": [
+      {
+        "prompt": "别出正式报告，我就问下 527路 在 20251221 的线路类型、所属车队这些基础档案。",
+        "timeout_ms": 120000,
+        "expect": {
+          "tool_not_in": ["generate_route_report"],
+          "must_contain_any": ["527", "线路类型", "车队"],
+          "must_not_contain_any": ["线路安全风险分析总结报告", "report_type"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R-3-only-check-existence",
+    "category": "should_not_recall",
+    "title": "线路报告不应召回：仅确认数据存在",
+    "turns": [
+      {
+        "prompt": "不要生成报告。请确认 527路 在 20251221 分区有没有线路画像数据就行。",
+        "timeout_ms": 120000,
+        "expect": {
+          "tool_not_in": ["generate_route_report"],
+          "must_contain_any": ["527"],
+          "must_not_contain_any": ["线路安全风险分析总结报告", "report_type"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R-4-two-route-comparison",
+    "category": "should_not_recall",
+    "title": "线路报告不应召回：多线路对比",
+    "turns": [
+      {
+        "prompt": "对比 527 和 100130 在 20251221 的基本情况，不要只给一条线路的长篇正式报告。",
+        "timeout_ms": 120000,
+        "expect": {
+          "tool_not_in": ["generate_route_report"],
+          "must_not_contain_any": ["线路安全风险分析总结报告", "report_type"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R-5-no-route-vague-question",
+    "category": "should_not_recall",
+    "title": "线路报告不应召回：无线路泛问",
+    "turns": [
+      {
+        "prompt": "公交线路安全管理一般要注意啥？先不说具体哪条线路。",
+        "timeout_ms": 120000,
+        "expect": {
+          "tool_not_in": ["generate_route_report"],
+          "must_contain_any": ["公交", "线路", "安全"],
+          "must_not_contain_any": ["527", "线路安全风险分析总结报告", "report_type"]
+        }
+      }
+    ]
+  }
+]

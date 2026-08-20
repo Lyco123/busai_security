@@ -1,0 +1,829 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[UTF8]{ctex}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+
+\geometry{left=2.5cm,right=2.5cm,top=3cm,bottom=3cm}
+
+% 代码样式
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+  keywordstyle=\color{blue},
+  stringstyle=\color{red},
+  commentstyle=\color{green!60!black},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+}
+
+% 定义 JSON 语言
+\lstdefinelanguage{json}{
+  basicstyle=\ttfamily\small,
+  stringstyle=\color{red},
+  commentstyle=\color{green!60!black},
+  keywordstyle=\color{blue},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+}
+
+% 定义 JavaScript 语言
+\lstdefinelanguage{javascript}{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue}\bfseries,
+  stringstyle=\color{red},
+  commentstyle=\color{green!60!black},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+  morekeywords={const, let, var, function, async, await, fetch, JSON, console, log},
+}
+
+% 页眉页脚
+\pagestyle{fancy}
+\setlength{\headheight}{14.5pt}
+\fancyhf{}
+\fancyhead[L]{智能公交安全助理 - API接口文档}
+\fancyhead[R]{\today}
+\fancyfoot[C]{\thepage}
+
+\title{智能公交安全助理\\API接口文档}
+\author{Agent Service API}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{概述}
+
+\subsection{简介}
+
+智能公交安全助理（Agent Service）提供基于大语言模型的智能对话服务，支持生成安全评估报告、智能咨询等功能。本文档描述了Agent服务的REST API接口规范。
+
+\subsection{基础信息}
+
+\begin{itemize}
+  \item \textbf{基础路径}: \texttt{/api/agent}
+  \item \textbf{协议}: HTTP/HTTPS
+  \item \textbf{数据格式}: JSON
+  \item \textbf{字符编码}: UTF-8
+\end{itemize}
+
+\subsection{版本信息}
+
+\begin{itemize}
+  \item \textbf{API版本}: v1
+  \item \textbf{文档版本}: 1.0.0
+  \item \textbf{最后更新}: \today
+\end{itemize}
+
+\section{通用规范}
+
+\subsection{请求格式}
+
+所有请求应包含以下HTTP头：
+
+\begin{lstlisting}[language=bash]
+Content-Type: application/json
+Accept: application/json
+\end{lstlisting}
+
+\subsection{响应格式}
+
+所有响应均为JSON格式，包含以下字段：
+
+\begin{itemize}
+  \item \textbf{成功响应}: 直接返回数据对象或数组
+  \item \textbf{错误响应}: 包含 \texttt{error} 字段，描述错误信息
+\end{itemize}
+
+\subsection{HTTP状态码}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{ll}
+    \toprule
+    状态码 & 说明 \\
+    \midrule
+    200 & 请求成功 \\
+    201 & 创建成功 \\
+    400 & 请求参数错误 \\
+    404 & 资源不存在 \\
+    500 & 服务器内部错误 \\
+    \bottomrule
+  \end{tabular}
+  \caption{HTTP状态码说明}
+\end{table}
+
+\subsection{错误响应格式}
+
+\begin{lstlisting}[language=json]
+{
+  "error": "错误描述信息"
+}
+\end{lstlisting}
+
+\section{接口列表}
+
+\subsection{系统接口}
+
+\subsubsection{健康检查}
+
+检查服务运行状态。
+
+\textbf{请求}
+
+\begin{lstlisting}[language=bash]
+GET /api/agent/health
+\end{lstlisting}
+
+\textbf{响应}
+
+\begin{lstlisting}[language=json]
+{
+  "status": "ok",
+  "timestamp": "2024-01-15T10:30:00.000Z"
+}
+\end{lstlisting}
+
+\textbf{状态码}: 200
+
+\subsection{对话接口}
+
+\textbf{重要说明}：Agent服务采用智能路由机制，会根据用户消息的意图自动识别并分发到相应的工具进行处理。调用端无需关心具体的工具列表，只需发送消息即可。
+
+\subsubsection{获取会话列表}
+
+获取所有会话列表，按更新时间倒序排列。
+
+\textbf{请求}
+
+\begin{lstlisting}[language=bash]
+GET /api/agent/sessions
+\end{lstlisting}
+
+\textbf{响应}
+
+\begin{lstlisting}[language=json]
+[
+  {
+    "id": "session_123456",
+    "title": "新会话",
+    "preview": "请生成张三的安全报告...",
+    "updatedAt": "2024-01-15T10:30:00.000Z"
+  }
+]
+\end{lstlisting}
+
+\textbf{字段说明}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    字段 & 类型 & 说明 \\
+    \midrule
+    id & String & 会话ID \\
+    title & String & 会话标题 \\
+    preview & String & 会话预览（最后一条消息的摘要） \\
+    updatedAt & String & 更新时间（ISO 8601格式） \\
+    \bottomrule
+  \end{tabular}
+  \caption{会话列表响应字段}
+\end{table}
+
+\textbf{状态码}: 200
+
+\subsubsection{创建会话}
+
+创建一个新的会话。
+
+\textbf{请求}
+
+\begin{lstlisting}[language=bash]
+POST /api/agent/sessions
+Content-Type: application/json
+
+{
+  "title": "新会话"  // 可选，默认为"新会话"
+}
+\end{lstlisting}
+
+\textbf{请求参数}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{llll}
+    \toprule
+    参数 & 类型 & 必填 & 说明 \\
+    \midrule
+    title & String & 否 & 会话标题，默认为"新会话" \\
+    \bottomrule
+  \end{tabular}
+  \caption{创建会话请求参数}
+\end{table}
+
+\textbf{响应}
+
+\begin{lstlisting}[language=json]
+{
+  "id": "session_123456",
+  "title": "新会话",
+  "preview": "",
+  "updatedAt": "2024-01-15T10:30:00.000Z"
+}
+\end{lstlisting}
+
+\textbf{状态码}: 201
+
+\subsubsection{获取会话详情}
+
+获取指定会话的详细信息，包括所有消息记录。
+
+\textbf{请求}
+
+\begin{lstlisting}[language=bash]
+GET /api/agent/sessions/{sessionId}
+\end{lstlisting}
+
+\textbf{路径参数}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    参数 & 类型 & 说明 \\
+    \midrule
+    sessionId & String & 会话ID \\
+    \bottomrule
+  \end{tabular}
+  \caption{获取会话详情路径参数}
+\end{table}
+
+\textbf{响应}
+
+\begin{lstlisting}[language=json]
+{
+  "id": "session_123456",
+  "title": "新会话",
+  "preview": "请生成张三的安全报告...",
+  "updatedAt": "2024-01-15T10:30:00.000Z",
+  "messages": [
+    {
+      "id": "message_001",
+      "role": "user",
+      "content": "请生成张三的安全报告",
+      "createdAt": "2024-01-15T10:25:00.000Z",
+      "status": "complete"
+    },
+    {
+      "id": "message_002",
+      "role": "assistant",
+      "content": "正在为您生成张三的安全报告...",
+      "createdAt": "2024-01-15T10:25:05.000Z",
+      "status": "complete",
+      "metadata": {
+        "tool": "generate_driver_report",
+        "args": {
+          "driver_name": "张三"
+        }
+      }
+    }
+  ]
+}
+\end{lstlisting}
+
+\textbf{字段说明}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    字段 & 类型 & 说明 \\
+    \midrule
+    id & String & 会话ID \\
+    title & String & 会话标题 \\
+    preview & String & 会话预览 \\
+    updatedAt & String & 更新时间 \\
+    messages & Array & 消息列表 \\
+    messages[].id & String & 消息ID \\
+    messages[].role & String & 消息角色（user/assistant/system/tool） \\
+    messages[].content & String & 消息内容 \\
+    messages[].createdAt & String & 创建时间 \\
+    messages[].status & String & 状态（complete/error） \\
+    messages[].metadata & Object & 元数据（可选） \\
+    \bottomrule
+  \end{tabular}
+  \caption{会话详情响应字段}
+\end{table}
+
+\textbf{状态码}: 200
+
+\textbf{错误响应}: 404（会话不存在）
+
+\subsubsection{删除会话}
+
+删除指定的会话及其所有消息记录。
+
+\textbf{请求}
+
+\begin{lstlisting}[language=bash]
+DELETE /api/agent/sessions/{sessionId}
+\end{lstlisting}
+
+\textbf{路径参数}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    参数 & 类型 & 说明 \\
+    \midrule
+    sessionId & String & 会话ID \\
+    \bottomrule
+  \end{tabular}
+  \caption{删除会话路径参数}
+\end{table}
+
+\textbf{响应}
+
+\begin{lstlisting}[language=json]
+{
+  "success": true
+}
+\end{lstlisting}
+
+\textbf{状态码}: 200
+
+\textbf{错误响应}: 404（会话不存在）
+
+\subsection{对话接口}
+
+\subsubsection{发送消息（非流式）}
+
+向Agent发送消息，并获取AI助手的回复。此接口会等待完整响应后返回。
+
+\textbf{请求}
+
+\begin{lstlisting}[language=bash]
+POST /api/agent/chat
+Content-Type: application/json
+
+{
+  "content": "请生成张三的安全报告",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你好"
+    },
+    {
+      "role": "assistant",
+      "content": "您好，我是智能公交安全助理，有什么可以帮助您的吗？"
+    }
+  ]
+}
+\end{lstlisting}
+
+\textbf{请求参数}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{llll}
+    \toprule
+    参数 & 类型 & 必填 & 说明 \\
+    \midrule
+    content & String & 是 & 当前用户消息内容 \\
+    messages & Array & 否 & 历史消息列表，用于构建上下文。每个消息包含role（user/assistant）和content字段 \\
+    \bottomrule
+  \end{tabular}
+  \caption{发送消息请求参数}
+\end{table}
+
+\textbf{响应}
+
+\begin{lstlisting}[language=json]
+{
+  "id": "message_002",
+  "role": "assistant",
+  "content": "正在为您生成张三的安全报告...",
+  "createdAt": "2024-01-15T10:25:05.000Z",
+  "status": "complete",
+  "metadata": {
+    "tool": "generate_driver_report",
+    "args": {
+      "driver_name": "张三"
+    },
+    "iterations": 2
+  }
+}
+\end{lstlisting}
+
+\textbf{字段说明}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    字段 & 类型 & 说明 \\
+    \midrule
+    id & String & 消息ID \\
+    role & String & 消息角色（assistant） \\
+    content & String & AI回复内容 \\
+    createdAt & String & 创建时间 \\
+    status & String & 状态（complete/error） \\
+    metadata & Object & 元数据（可选） \\
+    metadata.tool & String & 使用的工具名称 \\
+    metadata.args & Object & 工具参数 \\
+    metadata.iterations & Number & 工具调用迭代次数 \\
+    \bottomrule
+  \end{tabular}
+  \caption{发送消息响应字段}
+\end{table}
+
+\textbf{状态码}: 200
+
+\textbf{错误响应}
+
+\begin{itemize}
+  \item 400: 缺少 sessionId 或 content
+  \item 404: 会话不存在
+\end{itemize}
+
+\subsubsection{发送消息（流式）}
+
+向指定会话发送消息，以Server-Sent Events (SSE)流式返回AI助手的回复。适用于需要实时显示回复内容的场景。
+
+\textbf{请求}
+
+\begin{lstlisting}[language=bash]
+POST /api/agent/chat/stream
+Content-Type: application/json
+
+{
+  "sessionId": "session_123456",
+  "content": "请分析一下最近的风险趋势"
+}
+\end{lstlisting}
+
+\textbf{请求参数}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{llll}
+    \toprule
+    参数 & 类型 & 必填 & 说明 \\
+    \midrule
+    sessionId & String & 是 & 会话ID \\
+    content & String & 是 & 用户消息内容 \\
+    \bottomrule
+  \end{tabular}
+  \caption{流式发送消息请求参数}
+\end{table}
+
+\textbf{响应格式}
+
+响应为Server-Sent Events (SSE)流，包含以下事件类型：
+
+\begin{enumerate}
+  \item \textbf{start}: 开始处理
+  \item \textbf{chunk}: 内容片段（可能多次）
+  \item \textbf{complete}: 完成处理
+  \item \textbf{error}: 错误信息（如果发生错误）
+\end{enumerate}
+
+\textbf{事件格式}
+
+\begin{lstlisting}[language=bash]
+# 开始事件
+data: {"type":"start","messageId":"message_002"}
+
+# 内容片段事件（可能多次）
+data: {"type":"chunk","content":"正在"}
+
+data: {"type":"chunk","content":"为您"}
+
+data: {"type":"chunk","content":"生成"}
+
+# 完成事件
+data: {"type":"complete","messageId":"message_002","metadata":{...}}
+
+# 错误事件（如果发生）
+data: {"type":"error","error":"错误信息"}
+\end{lstlisting}
+
+\textbf{事件字段说明}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    字段 & 类型 & 说明 \\
+    \midrule
+    type & String & 事件类型（start/chunk/complete/error） \\
+    messageId & String & 消息ID（start/complete事件） \\
+    content & String & 内容片段（chunk事件） \\
+    metadata & Object & 元数据（complete事件） \\
+    error & String & 错误信息（error事件） \\
+    \bottomrule
+  \end{tabular}
+  \caption{SSE事件字段说明}
+\end{table}
+
+\textbf{HTTP头}
+
+\begin{lstlisting}[language=bash]
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+\end{lstlisting}
+
+\textbf{状态码}: 200
+
+\textbf{错误响应}: 404（会话不存在）
+
+\textbf{客户端示例（JavaScript）}
+
+\begin{lstlisting}[language=javascript]
+const response = await fetch('/api/agent/chat/stream', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    sessionId: 'session_123456',
+    content: '请分析一下最近的风险趋势'
+  })
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  
+  const chunk = decoder.decode(value);
+  const lines = chunk.split('\n');
+  
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      const data = JSON.parse(line.slice(6));
+      
+      switch (data.type) {
+        case 'start':
+          console.log('开始处理:', data.messageId);
+          break;
+        case 'chunk':
+          console.log('内容片段:', data.content);
+          // 实时显示内容
+          break;
+        case 'complete':
+          console.log('处理完成:', data.metadata);
+          break;
+        case 'error':
+          console.error('错误:', data.error);
+          break;
+      }
+    }
+  }
+}
+\end{lstlisting}
+
+\section{数据模型}
+
+\subsection{会话模型（Session）}
+
+\begin{lstlisting}[language=json]
+{
+  "id": "string",           // 会话ID
+  "title": "string",        // 会话标题
+  "preview": "string",      // 会话预览
+  "updatedAt": "string"     // 更新时间（ISO 8601）
+}
+\end{lstlisting}
+
+\subsection{消息模型（Message）}
+
+\begin{lstlisting}[language=json]
+{
+  "id": "string",           // 消息ID
+  "role": "string",         // 角色：user/assistant/system/tool
+  "content": "string",      // 消息内容
+  "createdAt": "string",    // 创建时间（ISO 8601）
+  "status": "string",       // 状态：complete/error
+  "metadata": {             // 元数据（可选）
+    "tool": "string",       // 使用的工具名称
+    "args": {},             // 工具参数
+    "iterations": 0         // 工具调用迭代次数
+  }
+}
+\end{lstlisting}
+
+\section{使用示例}
+
+\subsection{完整流程示例}
+
+以下示例展示如何创建一个会话并进行对话：
+
+\begin{lstlisting}[language=javascript]
+// 1. 创建会话
+const createResponse = await fetch('/api/agent/sessions', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ title: '安全报告生成' })
+});
+const session = await createResponse.json();
+console.log('会话ID:', session.id);
+
+// 2. 发送消息
+const chatResponse = await fetch('/api/agent/chat', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    sessionId: session.id,
+    content: '请生成张三的安全报告'
+  })
+});
+const message = await chatResponse.json();
+console.log('AI回复:', message.content);
+
+// 3. 获取会话详情
+const detailResponse = await fetch(`/api/agent/sessions/${session.id}`);
+const detail = await detailResponse.json();
+console.log('会话消息数:', detail.messages.length);
+
+// 4. 删除会话
+await fetch(`/api/agent/sessions/${session.id}`, {
+  method: 'DELETE'
+});
+\end{lstlisting}
+
+\subsection{流式对话示例}
+
+\begin{lstlisting}[language=javascript]
+async function streamChat(content, messages = []) {
+  const response = await fetch('/api/agent/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, messages })
+  });
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullContent = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n');
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = JSON.parse(line.slice(6));
+
+        if (data.type === 'chunk') {
+          fullContent += data.content;
+          // 实时更新UI
+          updateUI(fullContent);
+        } else if (data.type === 'complete') {
+          console.log('完成，消息ID:', data.messageId);
+        } else if (data.type === 'error') {
+          console.error('错误:', data.error);
+        }
+      }
+    }
+  }
+
+  return fullContent;
+}
+\end{lstlisting}
+
+\section{错误处理}
+
+\subsection{常见错误}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    错误码 & 错误信息 & 解决方案 \\
+    \midrule
+    400 & 缺少 sessionId 或 content & 检查请求参数 \\
+    404 & 会话不存在 & 确认会话ID是否正确 \\
+    500 & 服务器内部错误 & 联系技术支持 \\
+    \bottomrule
+  \end{tabular}
+  \caption{常见错误及解决方案}
+\end{table}
+
+\subsection{错误响应示例}
+
+\begin{lstlisting}[language=json]
+{
+  "error": "会话不存在"
+}
+\end{lstlisting}
+
+\section{最佳实践}
+
+\subsection{上下文管理}
+
+\begin{itemize}
+  \item Agent服务采用无状态设计，不提供会话管理功能
+  \item 调用端需要自行管理会话和消息历史
+  \item 每次请求时传递完整的历史消息列表（messages参数）
+  \item 建议限制历史消息数量，避免超出上下文窗口（默认保留最近50条消息）
+  \item 历史消息格式：每个消息包含role（user/assistant）和content字段
+\end{itemize}
+
+\subsection{消息处理}
+
+\begin{itemize}
+  \item 对于需要实时反馈的场景，使用流式接口（\texttt{/chat/stream}）
+  \item 对于批量处理或不需要实时反馈的场景，使用非流式接口（\texttt{/chat}）
+  \item 合理控制消息长度，避免超出上下文窗口限制
+\end{itemize}
+
+\subsection{错误处理}
+
+\begin{itemize}
+  \item 始终检查HTTP状态码
+  \item 实现重试机制，处理网络错误
+  \item 记录错误日志，便于问题排查
+\end{itemize}
+
+\section{附录}
+
+\subsection{工具说明}
+
+\subsubsection{generate\_driver\_report}
+
+生成驾驶员安全评估报告，包含风险评分、行为画像及改进建议。
+
+\textbf{参数}
+
+\begin{itemize}
+  \item \texttt{driver\_name} (String, 必填): 驾驶员姓名
+\end{itemize}
+
+\subsubsection{generate\_vehicle\_report}
+
+生成车辆运行分析报告，分析车辆的维修记录、故障率及能耗数据。
+
+\textbf{参数}
+
+\begin{itemize}
+  \item \texttt{vehicle\_id} (String, 必填): 车辆ID或车牌号
+\end{itemize}
+
+\subsubsection{generate\_route\_report}
+
+生成线路风险扫描报告，基于线路的历史事故数据和路况信息。
+
+\textbf{参数}
+
+\begin{itemize}
+  \item \texttt{route\_name} (String, 必填): 线路名称或编号
+\end{itemize}
+
+\subsubsection{consult\_omni}
+
+智能咨询助手，支持趋势分析、归因分析、政策问答等复杂查询。
+
+\textbf{参数}
+
+\begin{itemize}
+  \item \texttt{query} (String, 必填): 用户查询内容
+\end{itemize}
+
+\subsection{变更日志}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    版本 & 日期 & 变更说明 \\
+    \midrule
+    1.0.0 & 2024-01-15 & 初始版本 \\
+    \bottomrule
+  \end{tabular}
+  \caption{API版本变更日志}
+\end{table}
+
+\end{document}
+

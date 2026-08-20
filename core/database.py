@@ -1,0 +1,87 @@
+# -*- coding: utf-8 -*-
+# @version        : 1.0
+# @Update Time    : 2023/8/18 9:00
+# @File           : database.py
+# @IDE            : PyCharm
+# @desc           : SQLAlchemy 部分
+
+from typing import AsyncGenerator
+
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker, AsyncAttrs
+from sqlalchemy.orm import DeclarativeBase, declared_attr
+from application.settings import REDIS_DB_ENABLE, MONGO_DB_ENABLE,CLICKHOUSE_DB_ENABLE
+from fastapi import Request
+from core.exception import CustomException
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
+class Base(AsyncAttrs, DeclarativeBase):
+    """
+    创建基本映射类
+    稍后，我们将继承该类，创建每个 ORM 模型
+    """
+
+    @declared_attr.directive
+    def __tablename__(cls) -> str:
+        """
+        将表名改为小写
+        如果有自定义表名就取自定义，没有就取小写类名
+        """
+        table_name = cls.__tablename__
+        if not table_name:
+            model_name = cls.__name__
+            ls = []
+            for index, char in enumerate(model_name):
+                if char.isupper() and index != 0:
+                    ls.append("_")
+                ls.append(char)
+            table_name = "".join(ls).lower()
+        return table_name
+
+
+async def db_getter() -> AsyncGenerator[AsyncSession, None]:
+    """
+    获取主数据库会话
+
+    数据库依赖项，它将在单个请求中使用，然后在请求完成后将其关闭。
+
+    函数的返回类型被注解为 AsyncGenerator[int, None]，其中 AsyncSession 是生成的值的类型，而 None 表示异步生成器没有终止条件。
+    """
+
+
+def redis_getter(request: Request) -> Redis:
+    """
+    获取 redis 数据库对象
+
+    全局挂载，使用一个数据库对象
+    """
+    if not REDIS_DB_ENABLE:
+        raise CustomException("请先配置Redis数据库链接并启用！", desc="请启用 application/settings.py: REDIS_DB_ENABLE")
+    return request.app.state.redis
+
+
+def mongo_getter(request: Request) -> AsyncIOMotorDatabase:
+    """
+    获取 mongo 数据库对象
+
+    全局挂载，使用一个数据库对象
+    """
+    if not MONGO_DB_ENABLE:
+        raise CustomException(
+            msg="请先开启 MongoDB 数据库连接！",
+            desc="请启用 application/settings.py: MONGO_DB_ENABLE"
+        )
+    return request.app.state.mongo
+
+def clickhouse_getter(request: Request) -> AsyncIOMotorDatabase:
+    """
+    获取 mongo 数据库对象
+
+    全局挂载，使用一个数据库对象
+    """
+    if not CLICKHOUSE_DB_ENABLE:
+        raise CustomException(
+            msg="请先开启 Clickhouse 数据库连接！",
+            desc="请启用 application/settings.py: CLICKHOUSE_DB_ENABLE"
+        )
+    return request.app.state.clickhouse

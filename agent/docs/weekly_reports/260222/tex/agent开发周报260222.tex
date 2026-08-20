@@ -1,0 +1,140 @@
+\documentclass[UTF8]{ctexart}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\title{Agent开发周报 260222}
+\author{刘德辰}
+\date{2026年02月22日}
+
+\begin{document}
+
+\maketitle
+
+\section{向量数据库方案}
+
+\textbf{背景}：解决规则数量增长后系统响应变慢的问题，提升规则匹配性能。
+
+\textbf{方案说明}：采用 Qdrant 向量数据库替换当前全量加载方式，实现高效规则匹配检索，支持多租户隔离、规则启停控制等生产需求。分阶段灰度发布，支持快速回滚。
+
+\textbf{当前状态}：方案设计已完成，待实施。
+
+\section{Demo 资产本地部署方案}
+
+\textbf{背景}：支持在自有服务器上部署稳定版本，用于对外展示和重要交付，提升演示稳定性和数据安全性。
+
+\textbf{方案说明}：采用 Docker 容器化部署，一键启动，支持运行完整后端服务栈（Agent 后端 + PostgreSQL + Redis）。
+
+\textbf{当前状态}：部署方案和实操手册已完成，待实施。
+
+\section{规则测试功能}
+
+\textbf{功能定位}：在保存规则前，可以测试规则是否能正确匹配问题并生成预期回复，避免配置错误影响生产环境。
+
+\textbf{功能说明}：
+\begin{itemize}
+    \item 在规则配置页面新增"测试规则"入口，支持对规则草稿进行测试
+    \item 可输入最多 10 条测试问题，或一键使用规则示例自动填充
+    \item 测试结果展示：
+    \begin{itemize}
+        \item 每条测试问题的匹配得分和排名
+        \item 是否会在实际运行时触发该规则
+        \item 与其他现有规则的匹配对比（Top-K 列表）
+        \item 可预览规则执行后的回复效果
+    \end{itemize}
+    \item 用颜色标识匹配状态，帮助快速判断规则配置质量
+    \item 仅支持规则草稿测试，已保存规则的在线测试功能待开发。
+\end{itemize}
+
+\section{对话页面快速提报功能}
+
+\textbf{用户价值}：在对话过程中，无需跳转页面即可快速记录评估结果或提交问题，提升反馈效率。
+
+\textbf{功能说明}：
+\begin{itemize}
+    \item 在对话输入区上方新增固定入口条，提供 \texttt{Eval}（快速提交评估）和 \texttt{Issue}（快速提交问题）两个入口
+    \item 快速提交弹窗：
+    \begin{itemize}
+        \item 自动带入当前会话上下文（消息原文、会话信息、模型版本等）
+        \item 支持选择要引用的消息，自动生成上下文摘要
+        \item 提供最小必要字段表单，减少填写负担
+        \item 提交前可预览提报内容，确认信息完整性
+    \end{itemize}
+    \item 提交成功后提供快捷入口：继续对话 / 查看该条 / 进入看板
+    \item 自动保存草稿，避免重复填写
+\end{itemize}
+
+\section{研究评估台}
+
+\textbf{功能定位}：将数据分析、样本研究、问题提报、看板管理整合到一个工作台，减少页面跳转，提升研究效率。
+
+\textbf{功能说明}：
+\begin{itemize}
+    \item 新增"研究"一级导航，包含三个子标签：总览 / Eval 看板 / Issue 看板
+    \item \textbf{总览页}：展示 Eval 和 Issue 的趋势、类型分布、场景分布、模型版本分布、风险热点等聚合指标
+    \item \textbf{Eval 看板}：列表展示评估记录，支持筛选、排序、快速提报 Issue，可查看关联会话详情
+    \item \textbf{Issue 看板}：看板式展示 Issue 状态流转（待处理/进行中/已关闭），支持筛选、排序、详情查看
+    \item Issue 提报功能：独立页面（\texttt{/research/issue/submit}），支持从 Eval 关联提报或独立提报
+    \item 与对话页面快速提报功能联动，支持双向追溯（从对话提报 → 在研究台查看，从研究台 → 跳转回对话）
+\end{itemize}
+
+\textbf{当前状态}：核心功能已实现，持续优化中。
+
+\section{测试+迭代方案}
+
+\textbf{测试人员价值}：提供系统化的测试方案和用例，明确测试重点。
+
+\textbf{测试范围}：
+\begin{itemize}
+    \item \textbf{四个核心组件}：Router（路由决策）、Omni（综合生成）、RuleConfig（规则配置：rule\_asker + rule\_builder）、RuleReply（规则回复）
+    \item \textbf{三个业务对象}：单位画像、车辆画像、驾驶员画像
+\end{itemize}
+
+\textbf{测试策略}（基于第一性原理）：
+\begin{itemize}
+    \item \textbf{Router 测试重点}：规则匹配分数（threshold=0.7）与路由决策一致性、force\_rule vs router\_decide 模式行为、rule\_exit 后降级路由
+    \item \textbf{Omni 测试重点}：数据真实性（不编造不存在数据）、数据查询工具调用正确性、综合分析逻辑一致性
+    \item \textbf{RuleConfig 测试重点}：字段识别准确性、examples 询问时机、冲突检测（red≥0.92, yellow≥0.8）、"你自己编"指令处理、编译输出 JSON 格式正确性
+    \item \textbf{RuleReply 测试重点}：模板填充正确性、缺参追问合理性（一次≤2项）、离题退出准确性（rule\_exit 无文本输出）、do\_not\_say 约束
+\end{itemize}
+
+\textbf{测试执行流程}：
+\begin{enumerate}
+    \item 在 AI 助手页面执行测试用例，观察回复内容和 metadata（通过浏览器开发者工具查看）
+    \item 发现问题 → 通过快速提报功能记录 Eval 或直接提报 Issue
+    \item 在「研究」→「Eval 看板」或「Issue 看板」中跟踪问题状态
+    \item 修复后验证 → 执行回归测试集
+\end{enumerate}
+
+\textbf{回归测试集}：
+\begin{itemize}
+    \item \textbf{P0（必须）}：Router 高分命中/低分未命中、Omni 不编造数据、RuleConfig 完整配置流程、RuleReply 模板填充/缺参追问/离题退出（约 15 条用例）
+    \item \textbf{P1（优化）}：多规则竞争、数据一致性、字段识别、冲突检测等（约 10 条用例）
+    \item \textbf{P2（抽样）}：其他场景按影响面抽样执行
+\end{itemize}
+
+\textbf{详细测试方案}：参见 \texttt{agent/docs/Agent测试迭代方案.md}
+
+\section{技术债务与限制}
+
+\begin{itemize}
+    \item \textbf{向量数据库待实施}：方案设计已完成，待按计划分阶段实施。
+    \item \textbf{规则测试功能限制}：仅支持规则草稿测试，已保存规则的在线测试功能待开发。
+    \item \textbf{研究评估台功能完善}：核心功能已实现，持续优化筛选、排序、关联追溯等体验。
+    \item \textbf{规则模板库}：建立常用规则模板，降低配置成本（当前不做，备忘）。
+\end{itemize}
+
+\section{下周计划}
+
+\begin{enumerate}
+    \item \textbf{向量数据库实施}：开始实施向量数据库方案，并测试，产出客户端部署的初步方案
+    \item \textbf{研究评估台开发}：完善统计/分析/追踪功能
+    \item \textbf{规则版本管理}：支持历史版本查看和回滚
+    \item \textbf{Agent测试和迭代}：按测试和迭代方案执行
+\end{enumerate}
+
+\end{document}
+

@@ -1,0 +1,247 @@
+[
+  {
+    "id": "basic-01",
+    "scenario_type": "basic_query",
+    "title": "车辆类型总览",
+    "focus": ["应直接回答", "不应编造数据"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["巴士集团车辆类型有哪些"]
+  },
+  {
+    "id": "basic-02",
+    "scenario_type": "basic_query",
+    "title": "车辆健康指标说明",
+    "focus": ["应围绕车辆主体", "应直接回答"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["请说明车辆健康状态一般看哪些指标"]
+  },
+  {
+    "id": "basic-03",
+    "scenario_type": "basic_query",
+    "title": "已知车牌查询",
+    "focus": ["查不到时不应编造", "必要时应追问补参"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": true,
+    "turns": ["请查询粤A33725D的车辆信息"]
+  },
+  {
+    "id": "basic-04",
+    "scenario_type": "basic_query",
+    "title": "新能源续航不足",
+    "focus": ["应围绕车辆问题", "应给出处理建议"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["新能源车辆续航不足要怎么处理"]
+  },
+  {
+    "id": "basic-05",
+    "scenario_type": "basic_query",
+    "title": "车门异常报码",
+    "focus": ["应解释车辆告警", "不应答非所问"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["车辆报码“车门异常”通常是什么意思"]
+  },
+  {
+    "id": "diag-01",
+    "scenario_type": "explain_diagnose",
+    "title": "轮胎异常磨损",
+    "focus": ["应给出原因解释", "应保持车辆语境"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["车辆轮胎异常磨损通常有哪些原因"]
+  },
+  {
+    "id": "diag-02",
+    "scenario_type": "explain_diagnose",
+    "title": "风险分解释",
+    "focus": ["应解释风险分含义", "不应空答"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["车辆风险分偏高通常说明什么"]
+  },
+  {
+    "id": "diag-03",
+    "scenario_type": "explain_diagnose",
+    "title": "制动系统报警解释",
+    "focus": ["应解释告警", "应给出初步排查顺序"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["维修工单里“制动系统报警”一般要先检查什么"]
+  },
+  {
+    "id": "diag-04",
+    "scenario_type": "explain_diagnose",
+    "title": "电池温度过高",
+    "focus": ["应解释风险", "应给出排查思路"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["车辆电池温度过高应该先排查哪些原因"]
+  },
+  {
+    "id": "diag-05",
+    "scenario_type": "explain_diagnose",
+    "title": "转向系统异响",
+    "focus": ["应说明风险", "不应越出车辆主题"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["车辆转向系统异响可能有哪些风险"]
+  },
+  {
+    "id": "complex-01",
+    "scenario_type": "complex_analysis",
+    "title": "车辆安全画像",
+    "focus": ["应更完整", "应包含风险点和整改建议"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["请生成一份车辆安全画像，重点写风险点和整改建议"]
+  },
+  {
+    "id": "complex-02",
+    "scenario_type": "complex_analysis",
+    "title": "频繁告警归因",
+    "focus": ["应适合专家链路", "应给出排查顺序"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["请对一辆公交车最近频繁告警做归因分析，并给出排查顺序"]
+  },
+  {
+    "id": "complex-03",
+    "scenario_type": "complex_analysis",
+    "title": "维保整改建议",
+    "focus": ["应输出优先级", "应围绕车辆维保"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["请生成车辆维保整改建议清单，按优先级排序"]
+  },
+  {
+    "id": "complex-04",
+    "scenario_type": "complex_analysis",
+    "title": "故障复盘模板",
+    "focus": ["应给结构化模板", "不应空泛"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["请写一份车辆故障复盘报告模板"]
+  },
+  {
+    "id": "complex-05",
+    "scenario_type": "complex_analysis",
+    "title": "能耗异常分析",
+    "focus": ["应给出归因", "应给出处理建议"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": ["请分析车辆能耗异常可能的原因，并给出处理建议"]
+  },
+  {
+    "id": "multi-01",
+    "scenario_type": "multi_turn",
+    "title": "类型到风险点",
+    "focus": ["应保持上下文", "应稳定围绕车辆主体"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": [
+      "请查询巴士集团车辆类型有哪些",
+      "大型普通客车有多少辆",
+      "这类车辆常见风险点有哪些"
+    ]
+  },
+  {
+    "id": "multi-02",
+    "scenario_type": "multi_turn",
+    "title": "磨损到整改",
+    "focus": ["应保持同一问题链路", "不应上下文漂移"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": [
+      "请分析车辆轮胎异常磨损原因",
+      "如果同时伴随方向跑偏呢",
+      "整改建议按优先级排一下"
+    ]
+  },
+  {
+    "id": "multi-03",
+    "scenario_type": "multi_turn",
+    "title": "风险分到排查",
+    "focus": ["应多轮稳定", "应持续保留车辆语境"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": [
+      "请解释车辆风险分偏高通常说明什么",
+      "如果最近还有制动告警，该怎么排查",
+      "给我一个简短汇报口径"
+    ]
+  },
+  {
+    "id": "multi-04",
+    "scenario_type": "multi_turn",
+    "title": "画像需求补充",
+    "focus": ["应在补参后保持主题", "应给出结构化结果"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": false,
+    "turns": [
+      "请生成车辆画像需要哪些信息",
+      "如果我只有车牌号和最近告警记录可以吗",
+      "那请给我一个输出结构模板"
+    ]
+  },
+  {
+    "id": "multi-05",
+    "scenario_type": "multi_turn",
+    "title": "查不到后的补参引导",
+    "focus": ["查不到时不应编造", "应引导补参后续分析"],
+    "expected_vehicle_domain": true,
+    "should_ask_for_info": true,
+    "turns": [
+      "请查询粤A33725D的车辆信息",
+      "如果查不到应该补充什么",
+      "补参后一般还能继续做哪些分析"
+    ]
+  },
+  {
+    "id": "boundary-01",
+    "scenario_type": "boundary_exception",
+    "title": "驾驶员培训查询",
+    "focus": ["不应误入车辆专家", "应处理非车辆主体"],
+    "expected_vehicle_domain": false,
+    "should_ask_for_info": false,
+    "turns": ["查询张三驾驶员培训结果"]
+  },
+  {
+    "id": "boundary-02",
+    "scenario_type": "boundary_exception",
+    "title": "线路发车情况",
+    "focus": ["不应误入车辆专家", "应处理线路主体"],
+    "expected_vehicle_domain": false,
+    "should_ask_for_info": false,
+    "turns": ["帮我看一下这条线路今天的发车情况"]
+  },
+  {
+    "id": "boundary-03",
+    "scenario_type": "boundary_exception",
+    "title": "单位安全评分",
+    "focus": ["不应误入车辆专家", "应处理单位主体"],
+    "expected_vehicle_domain": false,
+    "should_ask_for_info": false,
+    "turns": ["这个单位本月安全评分怎么样"]
+  },
+  {
+    "id": "boundary-04",
+    "scenario_type": "boundary_exception",
+    "title": "缺少车辆标识",
+    "focus": ["应先追问补参", "不应编造车辆结果"],
+    "expected_vehicle_domain": null,
+    "should_ask_for_info": true,
+    "turns": ["请查询车辆信息"]
+  },
+  {
+    "id": "boundary-05",
+    "scenario_type": "boundary_exception",
+    "title": "模糊车辆问题",
+    "focus": ["应先澄清对象", "不应直接编造"],
+    "expected_vehicle_domain": null,
+    "should_ask_for_info": true,
+    "turns": ["这辆车最近有问题吗"]
+  }
+]

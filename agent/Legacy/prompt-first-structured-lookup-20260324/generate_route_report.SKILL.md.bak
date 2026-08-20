@@ -1,0 +1,215 @@
+---
+name: generate-route-report
+description: 用于生成线路安全风险分析总结报告（管理人员版），输出严格 JSON，前端按 layout 渲染。
+---
+
+# 技能：线路安全风险分析总结报告（管理人员版）
+
+## 执行目标
+- 根据 `route_name` 查询线路数据，输出可直接渲染的结构化 JSON。
+- 输出效果必须对齐《线路画像 AI 通用话术（20260305）》文档末尾的“安全风险分析总结报告回复模版——管理人员”。
+- 输出体验、章节结构、字段组织方式与驾驶员报告 skill 保持一致。
+- 仅输出 JSON，不输出 Markdown。
+
+## 工具调用（必须）
+1. 必须先调用：
+```json
+{"action":"get","entity_type":"route","entity_id":"<route_name>"}
+```
+2. 若 `get` 未命中：最多执行一次 `search` 或 `list` 找候选，再用候选 `id/name/identifier` 重新 `get` 一次。
+   - 候选必须与请求的 `route_name` 同名、同编号，或名称/编号显著包含同一路线 token。
+   - 若候选仅是其他线路（例如请求 `383路`，候选只有 `1路/12路`），不得继续 `get` 其他线路，必须直接判定为未命中。
+3. 若仍未命中：只返回错误 JSON，不得输出报告正文：
+```json
+{"error":"route_not_found","message":"未找到该线路，请确认线路名称或线路编号后重试"}
+```
+4. 禁止重复 `describe`，禁止对同一个 `entity_id/search_term` 反复调用 `query_data`。
+
+## 模板标注语法（硬约束）
+- 数据植入位必须用 `{}`，例如 `{383路}`、`{43}`、`{50/90}`。
+- AI分析发挥必须用 `【】`，不得使用 `[]` 代替。
+- 以下字段必须同时满足 `{}` 与 `【】` 标注规则：
+  - `layout.summary`
+  - `management_summary.summary_text`
+  - `core_risk_assessment.summary`
+  - `core_risk_assessment.detail_lines[]`
+  - `behavior_data_analysis.analysis_items[].insight`
+  - `interventions.recommendations[].suggestion`
+
+## 一级指标映射规则（核心）
+目标一级指标固定为以下三项，最终输出中只能出现这三项名称：
+- `综合风险`
+- `静态风险`
+- `动态风险`
+
+取值优先级：
+1. 优先读取新结构（若存在）：
+   - `performance_dashboard.dimensions.综合风险`
+   - `performance_dashboard.dimensions.静态风险`
+   - `performance_dashboard.dimensions.动态风险`
+2. 若新结构缺失，则从旧结构映射或聚合：
+   - `综合风险 <- performance_dashboard.summary.overall_score / risk_profile.overall / safety_rating.overall`
+   - `静态风险 <- risk_profile.static / static_risk.score / risk_profile.infrastructure / indicators.static_risk_road + indicators.static_risk_population + indicators.static_risk_blackspot`
+   - `动态风险 <- risk_profile.dynamic / dynamic_risk.score / risk_profile.traffic / indicators.dynamic_risk_faults / behavior_risk`
+3. 若某维度缺少直接分数，可用该维度真实基础指标的高分项推导相对排序，但不得编造固定示例值。
+
+禁止项：
+- 不得把 `交通安全/服务安全/运行安全` 直接作为 `dashboard_rows.dimension` 输出。
+- 不得把 `线形路况风险/人口密集区域风险/行为黑点风险/车辆故障总数` 直接作为一级维度名称。
+- 不得把静态类基础指标归入 `动态风险`，也不得把动态行为/故障指标归入 `静态风险`。
+- `静态风险` 缺少真实静态指标时，宁可使用维度默认抓手，也不得复用 `动态风险` 的高分基础指标。
+
+## 生成流程（硬约束）
+1. 抽取基础信息：
+   - 线路名称、线路编号/ID、所属单位、风险等级、风险分、排名、主要风险因素、统计周期。
+2. 生成 `dashboard_rows`：
+   - 仅输出三个一级指标（综合风险/静态风险/动态风险）。
+   - 每项包含：`dimension`、`score`、`trend_text`、`core_risk_indicators`。
+   - 按 `score` 从高到低排序（`null` 放最后）。
+   - `综合风险` 的 `core_risk_indicators` 可列 3-5 个综合性主风险因子；`静态风险/动态风险` 每项列 1-3 个核心基础指标。
+   - `静态风险` 只允许使用线形路况、人口密集区域、行为黑点等静态类基础指标。
+   - `动态风险` 只允许使用急加速、不规范进站、空挡滑行、车辆故障、运行行为等动态类基础指标。
+   - 若仅存在旧结构 `high_risk_segments.issue`，必须先判断该 `issue` 属于静态还是动态，再决定是否纳入对应维度；`high_risk_segments.segment/location` 可作为静态侧的高风险路段依据。
+3. 生成 `core_risk_assessment`：
+   - `summary` 必须点名三个一级指标，且按风险高到低顺序描述。
+   - `summary` 必须包含：线路标识、综合风险分、风险状态、主要风险因素；如有排名，还需写明排名与相对表现。
+   - `detail_lines` 必须 3 条，逐项对应三个一级指标，同序输出。
+   - `detail_lines` 每条都必须显式写出排名，格式至少满足：
+     - `第一，风险最高的指标是{...}，其中风险值最高的基础指标是{...}，...`
+     - `第二，风险次高的指标是{...}，其中风险值最高的基础指标是{...}，...`
+     - `第三，风险相对靠后的指标是{...}，其中风险值最高的基础指标是{...}，...`
+   - 若存在达到阈值的基础指标，必须在同条中继续列出“达到阈值的基础指标还包括{...}”。
+   - 若没有基础指标达到阈值，不能直接写“无风险”；必须结合趋势、排名、系统风险标签、地图黑点、事故/违章/运行表现等信号做推理分析。
+   - 若经推理仍未发现显著问题，必须明确提示“建议进一步排查近30天行为明细、线路黑点分布和干预执行记录”。
+4. 生成 `behavior_data_analysis.analysis_items`：
+   - 与 `dashboard_rows` 一一对应、同序、同数量。
+   - 每条包含：`rank_label`、`dimension`、`top_indicator`、`alert_count`、`insight`。
+   - 若原始数据已存在逐项 `analysis_items` 或等价映射结果，必须直接保序复用，不得自行改写排序或重新判断对应关系。
+   - 若某维度没有直接次数或报警量，必须显式说明“当前缺少直接报警指标/次数”，不得伪造数字。
+5. 生成 `interventions.recommendations`：
+   - 与 `analysis_items` 一一对应、同序、同数量。
+   - `priority` 必须是 `1..N`。
+   - `indicator` 必须等于同序 `analysis_items.top_indicator`。
+   - 若原始数据已存在逐项干预建议，必须与同序高分基础指标直接对应，不得让智能体自行改配。
+   - 若某维度缺少直接建议，不得复用其他维度的建议；应保留该维度位置，并输出该维度自己的管理抓手型表述。
+   - `suggestion` 文本前缀规则：
+     - 第1条：`风险最高的基础指标是{...}`
+     - 第2条：`其次是{...}`
+     - 第3条：`最后是{...}`
+6. 输出 `layout`，前端按 `layout` 渲染。
+
+## 输出结构（必含字段）
+```json
+{
+  "report_type": "route_safety_summary_management",
+  "template_version": "20260305",
+  "report_role": "management",
+  "layout": {
+    "title": "线路安全风险分析总结报告",
+    "summary": "",
+    "header": {
+      "items": [
+        {"label": "线路", "value_path": "management_summary.route_name"},
+        {"label": "所属单位", "value_path": "management_summary.fleet_name"},
+        {"label": "风险状态", "value_path": "management_summary.risk_level", "highlight": true}
+      ]
+    },
+    "sections": [
+      {
+        "title": "一、多维绩效看板",
+        "blocks": [
+          {
+            "type": "table",
+            "columns": [
+              {"title": "核心维度", "key": "dimension"},
+              {"title": "风险得分", "key": "score"},
+              {"title": "趋势表现", "key": "trend_text"},
+              {"title": "核心风险指标", "key": "core_risk_indicators"}
+            ],
+            "rows_path": "dashboard_rows"
+          }
+        ]
+      },
+      {
+        "title": "二、核心风险研判",
+        "blocks": [
+          {"type": "text", "text_path": "core_risk_assessment.summary"},
+          {"type": "list", "items_path": "core_risk_assessment.detail_lines", "ordered": true}
+        ]
+      },
+      {
+        "title": "三、行为与数据关联分析",
+        "blocks": [
+          {"type": "list", "items_path": "behavior_data_analysis.analysis_items", "ordered": true}
+        ]
+      },
+      {
+        "title": "四、针对性干预建议",
+        "blocks": [
+          {"type": "list", "items_path": "interventions.recommendations", "ordered": true}
+        ]
+      },
+      {
+        "title": "附录（原始数据）",
+        "collapsible": true,
+        "default_open": false,
+        "blocks": [
+          {"type": "json", "title": "原始数据", "data_path": "appendix"}
+        ]
+      }
+    ]
+  },
+  "management_summary": {
+    "report_date": "",
+    "route_name": "",
+    "route_id": "",
+    "fleet_name": "",
+    "risk_level": "",
+    "major_risk_factors": [],
+    "summary_text": ""
+  },
+  "dashboard_rows": [],
+  "core_risk_assessment": {
+    "summary": "",
+    "overall_score": null,
+    "risk_level": "",
+    "rank": {"position": null, "total": null, "display": ""},
+    "comparison": "",
+    "attention_note": "",
+    "detail_lines": []
+  },
+  "behavior_data_analysis": {"analysis_items": []},
+  "interventions": {"recommendations": []},
+  "appendix": {"raw_data": {}}
+}
+```
+
+## 字段填充约束
+- `layout.summary` 与 `management_summary.summary_text` 语义一致，采用完整自然语言句式。
+- `report_date` 优先使用统计周期；若存在 `source_window/as_of/start/end` 等字段，应输出可读日期区间。
+- `trend_text` 统一格式：`同比X，环比Y，同单位比Z`。
+- 无法从数据直接映射的值使用 `null` 或 `"—"`，禁止输出“暂无/待补充/建议事项/未知”。
+- `major_risk_factors` 必须来自真实数据中的高风险基础指标、黑点、告警、违章或干预对象，不得凭空编造。
+- 若某维度缺少直接明细指标，允许输出维度级管理抓手，但必须显式说明“当前缺少直接报警指标/次数”，不得伪造具体告警数据。
+- 若原始数据给出事故/违法/路段/黑点明细，可在 `appendix.raw_data` 中保留，但正文只引用与结论直接相关的部分。
+
+## 输出前自检（必须全部满足）
+- `dashboard_rows` 仅含三个一级指标，且按 `score` 降序。
+- `core_risk_assessment.summary` 与 `detail_lines` 均明确包含三个一级指标名称。
+- `core_risk_assessment.detail_lines` 每条都包含对应排名话术，且包含 `其中风险值最高的基础指标是`。
+- `analysis_items.dimension` 与 `dashboard_rows.dimension` 完全一致且同序。
+- `recommendations.indicator` 与 `analysis_items.top_indicator` 完全一致且同序。
+- 若源数据已存在逐项 `analysis_items` / `recommendations`，最终输出必须沿用其一一对应关系，不得重新洗牌。
+- `recommendations[0].suggestion` 包含 `风险最高的基础指标是`；
+  `recommendations[1].suggestion` 包含 `其次是`；
+  `recommendations[2].suggestion` 包含 `最后是`。
+- 关键文本字段满足 `{}` + `【】` 标注语法。
+
+## 禁止事项
+- 禁止未查询数据直接生成报告。
+- 禁止仅输出旧模板字段代替主结构（如仅输出 `risk_profile/high_risk_indicators/risk_segments`）。
+- 禁止把 `交通安全/服务安全/运行安全` 作为三个一级维度直接输出。
+- 禁止把三个一级维度的顺序写成固定顺序；必须按真实 `score` 从高到低排列。
+- 禁止复用固定示例数值（如 43、23、20、50/90、24次）作为本次真实结论。
+- 禁止虚构政策依据、黑点数量、风险次数、排名数据。
+- 若源数据只有旧结构，也必须生成上述统一 JSON；允许通过映射补齐，不得退回旧平铺结构。

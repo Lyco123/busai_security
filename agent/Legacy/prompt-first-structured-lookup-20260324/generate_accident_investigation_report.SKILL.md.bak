@@ -1,0 +1,75 @@
+---
+name: generate-accident-investigation-report
+description: 用于生成“事故调查情况和整改措施报告”。当用户请求事故调查报告、事故整改报告、事故复盘报告、事故原因与整改计划等内容时使用。基于事故案例数据输出四大章节，并给出触发条款证据。
+---
+
+# 技能：生成事故调查整改报告
+
+## 目标
+生成结构化的事故调查整改报告，覆盖以下四章：
+1. 事故发生经过及应急处置情况
+2. 事故调查情况
+3. 事故调查原因分析及事故性质
+4. 整改措施和下阶段计划
+
+## 数据查询
+必须先调用 `query_data` 获取事故案例数据，再生成报告。
+
+建议步骤：
+1. 查询结构：
+```json
+{"action":"describe","entity_type":"incident_case"}
+```
+2. 查询案例：
+```json
+{"action":"get","entity_type":"incident_case","entity_id":"<incident_id>"}
+```
+3. 如精确匹配失败，可搜索：
+```json
+{"action":"search","entity_type":"incident_case","search_term":"<keyword>"}
+```
+
+## 输入参数
+- `incident_id`（必填，字符串）：事故编号/事故名称/日期关键词等可定位标识。
+
+## 输出格式
+输出 JSON，对应以下结构（字段名固定）：
+- `report_title`
+- `basic`
+- `section_1_event_and_response`
+- `section_2_investigation`
+- `section_3_cause_and_nature`
+- `section_4_rectification_plan`
+- `trigger_analysis`
+- `appendix`
+
+### 关键约束
+1. 每条原因结论必须绑定证据（行为计数、速度/CAN、线路风险等级、天气、故障状态等）。
+2. “触发条款”只在命中条件时输出到 `trigger_analysis.matched_signals`。
+3. 未命中或无数据的条款不强行生成结论。
+4. 缺失数据写入 `trigger_analysis.missing_data`，并在相关段落标注“数据缺失”。
+5. 保留公文语气，但不要编造具体数字与时间。
+
+## 触发条款建议
+在 `trigger_analysis.matched_signals` 中输出：
+- `signal`: 触发信号名称
+- `evidence`: 原始证据
+- `impact`: 对事故风险或责任判定的影响
+
+优先关注：
+- 疲劳/注意力相关行为
+- 斑马线或黑点路段相关违规行为
+- 车速与操作不当
+- 天气路况不利因素
+- 制动系统或 ABS 异常
+
+## 失败处理
+- 若查无案例：明确返回“未找到事故案例”，并建议用户提供更准确标识（编号/日期/驾驶员/线路）。
+- 若仅部分数据可用：继续生成报告，但明确列出缺失字段及影响。
+## 前端动态排版（新增）
+- 建议在输出 JSON 中增加 `layout` 字段，让前端按布局指令渲染，而不是固定模板。
+- `layout.sections[].blocks[]` 支持：`text`、`stats`、`kv`、`table`、`list`、`tags`、`callout`、`json`。
+- 每个 block 可使用 `*_path`（如 `rows_path`、`text_path`、`data_path`）引用主结构字段，减少重复数据。
+- 若 `layout` 缺失，前端会自动回退到原有固定模板渲染。
+- 输出前必须至少调用一次 `query_data`（`get/search/list` 任一），禁止直接产出占位报告。
+- 禁止用“暂无/建议事项/待补充/未知”充当有效内容；确实缺失时使用 `null` 或 `"—"`。

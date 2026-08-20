@@ -1,0 +1,207 @@
+[
+  {
+    "id": "normal-greeting",
+    "category": "normal",
+    "title": "基础问候",
+    "turns": [
+      {
+        "prompt": "你好",
+        "timeout_ms": 30000,
+        "expect": {
+          "response_kind": "text",
+          "tool_in": ["consult_omni"],
+          "ask_for_more_info": false,
+          "min_length": 6
+        }
+      }
+    ]
+  },
+  {
+    "id": "normal-vehicle-meta-types",
+    "category": "normal",
+    "title": "车辆类型统计查询",
+    "turns": [
+      {
+        "prompt": "巴士集团车辆类型有哪些",
+        "timeout_ms": 30000,
+        "expect": {
+          "response_kind": "text",
+          "ask_for_more_info": false,
+          "min_length": 20,
+          "must_contain_any": ["车辆类型", "大型", "客车", "辆"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "normal-vehicle-report-a12345",
+    "category": "normal",
+    "title": "已知车辆 A12345 报告生成",
+    "turns": [
+      {
+        "prompt": "请生成车辆安全报告，车牌号A12345",
+        "timeout_ms": 120000,
+        "expect": {
+          "response_kind": "report_json",
+          "tool_in": ["generate_vehicle_report"],
+          "ask_for_more_info": false,
+          "must_contain_any": ["report_type", "vehicle_safety_summary_management", "A12345", "BUS-102"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "normal-vehicle-report-b67890",
+    "category": "normal",
+    "title": "已知车辆 B67890 报告生成",
+    "turns": [
+      {
+        "prompt": "请生成车辆安全报告，车牌号B67890",
+        "timeout_ms": 120000,
+        "expect": {
+          "response_kind": "report_json",
+          "tool_in": ["generate_vehicle_report"],
+          "ask_for_more_info": false,
+          "must_contain_any": ["report_type", "vehicle_safety_summary_management", "B67890", "BUS-207"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "edge-too-short-vehicle-id",
+    "category": "edge",
+    "title": "过短车辆标识应追问",
+    "turns": [
+      {
+        "prompt": "请生成车辆安全报告，车牌号A",
+        "timeout_ms": 30000,
+        "expect": {
+          "response_kind": "clarify",
+          "tool_in": [null],
+          "ask_for_more_info": true,
+          "must_contain_any": ["完整车牌号", "车辆ID", "车辆安全报告"],
+          "must_not_contain_any": ["report_type", "vehicle_safety_summary_management"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "edge-vehicle-not-found",
+    "category": "edge",
+    "title": "不存在车辆应明确 not found",
+    "turns": [
+      {
+        "prompt": "请生成车辆安全报告，车牌号粤A33725D",
+        "timeout_ms": 30000,
+        "expect": {
+          "response_kind": "clarify",
+          "tool_in": [null],
+          "ask_for_more_info": true,
+          "must_contain_any": ["没有找到", "更准确", "车牌号"],
+          "must_not_contain_any": ["report_type", "vehicle_safety_summary_management"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "edge-driver-training-boundary",
+    "category": "edge",
+    "title": "驾驶员培训查询不应误路由到车辆专家",
+    "turns": [
+      {
+        "prompt": "查询张三驾驶员培训结果",
+        "timeout_ms": 60000,
+        "expect": {
+          "response_kind": "clarify",
+          "tool_not_in": ["consult_vehicle_expert"],
+          "ask_for_more_info": true,
+          "min_length": 12,
+          "must_contain_any": ["张三", "驾驶员", "确认", "请"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "edge-route-not-found",
+    "category": "edge",
+    "title": "不存在线路应明确 not found",
+    "turns": [
+      {
+        "prompt": "请生成线路安全报告，线路K1",
+        "timeout_ms": 30000,
+        "expect": {
+          "response_kind": "clarify",
+          "tool_in": [null],
+          "ask_for_more_info": true,
+          "must_contain_any": ["没有找到", "线路K1", "线路名称", "线路编号"],
+          "must_not_contain_any": ["report_type", "management_summary"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "multi-report-followup-why",
+    "category": "multi_turn",
+    "title": "报告后跟问原因应保留上下文",
+    "turns": [
+      {
+        "prompt": "请生成车辆安全报告，车牌号A12345",
+        "timeout_ms": 120000,
+        "expect": {
+          "response_kind": "report_json",
+          "tool_in": ["generate_vehicle_report"],
+          "ask_for_more_info": false,
+          "must_contain_any": ["report_type", "A12345"]
+        }
+      },
+      {
+        "prompt": "为什么能耗风险最高？",
+        "timeout_ms": 30000,
+        "expect": {
+          "response_kind": "text",
+          "tool_in": ["consult_vehicle_expert"],
+          "ask_for_more_info": false,
+          "min_length": 20,
+          "must_contain_any": ["能耗", "风险"],
+          "must_not_contain_any": ["请提供更具体", "车牌号", "线路名称"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "multi-report-followup-suggestions",
+    "category": "multi_turn",
+    "title": "连续跟问整改建议不应丢上下文",
+    "turns": [
+      {
+        "prompt": "请生成车辆安全报告，车牌号A12345",
+        "timeout_ms": 120000,
+        "expect": {
+          "response_kind": "report_json",
+          "tool_in": ["generate_vehicle_report"],
+          "ask_for_more_info": false
+        }
+      },
+      {
+        "prompt": "为什么能耗风险最高？",
+        "timeout_ms": 30000,
+        "expect": {
+          "response_kind": "text",
+          "ask_for_more_info": false,
+          "must_contain_any": ["能耗", "风险"]
+        }
+      },
+      {
+        "prompt": "给我前三个整改建议",
+        "timeout_ms": 30000,
+        "expect": {
+          "response_kind": "text",
+          "ask_for_more_info": false,
+          "min_length": 12,
+          "must_contain_any": ["整改", "建议"],
+          "must_not_contain_any": ["请提供更具体", "车牌号", "线路名称", "车辆或线路的详细信息"]
+        }
+      }
+    ]
+  }
+]

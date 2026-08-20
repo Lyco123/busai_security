@@ -1,0 +1,68 @@
+version: "3.9"
+
+services:
+  kb-api:
+    build: .
+    container_name: kb-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - qdrant
+      - clickhouse
+    volumes:
+      - kb_files:/data
+    cpus: 1.5
+    mem_limit: 2500m
+
+  kb-worker:
+    build: .
+    container_name: kb-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["node", "dist/worker.js"]
+    depends_on:
+      - qdrant
+      - clickhouse
+    volumes:
+      - kb_files:/data
+    cpus: 1.0
+    mem_limit: 2000m
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    container_name: kb-qdrant
+    restart: unless-stopped
+    expose:
+      - "6333"
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    cpus: 1.0
+    mem_limit: 5000m
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: kb-clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    cpus: 1.0
+    mem_limit: 4000m
+
+volumes:
+  qdrant_data:
+  clickhouse_data:
+  kb_files:

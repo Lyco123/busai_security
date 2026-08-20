@@ -1,0 +1,139 @@
+\documentclass[UTF8]{ctexart}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\title{Agent开发周报 260401}
+\author{刘德辰}
+\date{2026年4月1日}
+
+\begin{document}
+
+\maketitle
+
+\section{车辆报告链路继续完善：数据源切换、管道修复与指标补齐}
+
+\textbf{背景}：上周车辆报告虽然已经接入统一报告查询方向，但车辆这一类报告本身还有一组独立问题没有解决完：一是数据源还没有完全切到 MCP 侧，二是结构化查找、脚本文档和实际输出之间还有不一致，三是车辆报告的指标下钻能力还不够完整。
+
+\textbf{方案说明}：本周围绕车辆报告这条链路继续单独推进，先把数据源切到 MCP，再修正中间管道以及脚本文档和实际输出之间的不一致，最后补齐报告里的指标展开能力，让车辆报告本身先稳定下来，而不是和车辆专家实验混在一起推进。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 将车辆报告查询切到 MCP 数据源，补上车辆资料读取能力
+\item 修复车辆报告 MCP 管道中的结构化查找、路由衔接和执行链路问题
+\item 统一结构化报告数据源入口，减少不同报告类型各走一套来源判断的情况
+\item 继续对齐车辆报告输出与脚本文档，减少“脚本怎么写”和“结果怎么出”不一致的问题
+\item 扩展车辆报告指标下钻能力，补齐部分指标只能总览、不能进一步展开的问题
+\item 收紧报告 worker 的 negative prompt，并澄清报告类工具描述，减少报告生成时被错误引导或误触发
+\end{itemize}
+
+\section{车辆专家实验进入新阶段：从专家拆分到 CoT 模式对比}
+
+\textbf{背景}：上周新的实验重点是验证“车辆问题是否值得从 omni 中拆出来交给车辆专家”，这一轮实验已经进入真实流量。本周这条线继续推进，但重点已经不是报告链路，而是专家实验本身的路由边界、回答深度和 CoT 模式对比。
+
+\textbf{方案说明}：本周先补齐车辆专家技能入口和响应深度控制，再把实验正式推进到 CoT 模式 AB，对比“车辆专家普通模式”和“车辆专家 CoT 模式”的实际效果。同时继续收紧 omni 在车辆场景下的提示词边界，避免实验流量被通用链路提前截走。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 暴露车辆专家 router tool，让车辆专家实验链路更完整、更可控
+\item 为车辆专家技能补充 response-depth 路由能力，区分简短回答与展开分析两类场景
+\item 正式启动车辆专家 CoT AB，并补齐相关实验配置与说明材料
+\item 配套调整前端实验 UI、统计展示和联调脚本，方便继续观察实验命中与回答差异
+\item 新增车辆专家 cot mode routing，让实验组可以按模式稳定落到对应回答链路
+\item 补充 Y 组专用 omni negative prompting，减少 omni 对车辆问题的抢答倾向（其实是 router 分配问题）
+\end{itemize}
+
+\section{澄清与路由中间态继续统一：让补问、规则回复和路由判断走同一套入口}
+
+\textbf{背景}：除了报告和专家两条业务线之外，这周还有一条独立工作线是“中间态治理”。之前系统里对澄清补问、进一步补信息、规则回复和路由契约存在多套处理方式，有的直接写在 Runtime 里，有的在 Router 里兜底，有的在消息拼装时特殊处理，导致多轮对话行为不够一致。
+
+\textbf{方案说明}：本周把这部分作为单独事项推进。先抽出 clarification state helper 和通用澄清工具，再逐步把 request-further-info、rule-reply contract 和 pending clarification 都改为由 Router 统一判断，减少 Runtime 直接特判的情况。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 新增 clarification state helper，统一澄清状态的记录和恢复方式
+\item 将通用 clarification tool 接入 Runtime，补齐澄清能力的运行时入口
+\item 收紧 rule-reply routing contract，减少规则回复与普通咨询之间互相走错路径的情况
+\item 简化 request-further-info 消息管道，减少中间态消息在多处重复拼装
+\item 将 pending clarification 正式改为交由 Router 继续判断，而不是由 Runtime 直接分支处理
+\item 继续调整 rule-threshold router prompt，降低过于生硬的阈值判断带来的误分流
+\end{itemize}
+
+\section{RAG 服务从“可用”推进到“可接入”：上线交接、切块优化与检索增强}
+
+\textbf{背景}：知识库/RAG 这周也是一条完全独立的工作线。前期主要完成了基础服务搭建和入库链路，本周开始处理两类问题：一类是服务层面的上线交接、测试服恢复和文档补齐；另一类是检索质量本身，包括切块结构、召回效果和重排能力。
+
+\textbf{方案说明}：本周分两段推进。先把 RAG 服务当前状态、测试服务器恢复和交接流程整理清楚，明确服务已进入可用状态；再围绕层级切块、query rewrite 和 coarse rerank 继续优化检索质量，为后面接入 omni 提供更稳定的上下文来源。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 明确 RAG 服务已可用，并补齐测试服务器恢复、上线交接和部署说明文档
+\item 优化文档层级切块逻辑，改善 heading path、块合并和层次信息保留效果
+\item 补充 document parser、job worker 和知识库服务相关测试，降低后续继续迭代切块逻辑时的回归风险
+\item 在知识库详情页展示合并后的 chunk 细节，方便直接检查实际切块结果
+\item 新增 query rewrite、LLM 粗排和 rerank 能力，继续提升检索召回和排序质量
+\item 将知识库上下文正式注入 omni，为后续问答链路使用 RAG 提供入口
+\end{itemize}
+
+\section{分析页前端重建：主体迁到 Vue，并补齐构建与本地化}
+
+\textbf{背景}：分析页的前端改造是这周体量最大的一条工作线，而且和 Agent 主链路、RAG、车辆报告都没有直接关系。此前分析页长期堆在 React/TSX 结构里，页面重、图表多、维护成本高，继续在旧结构上加内容已经不太合适。
+
+\textbf{方案说明}：本周直接把分析页主体按 Vue 方案重建，并把旧 TSX 实现迁到 legacy 目录保留参考。迁移完成后，再补锁文件、构建依赖和中文文案，使新页面先达到“能跑、能看、能继续迭代”的状态。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 重建分析页工作台、图表注册体系和多类分析页面，主体切换到 Vue 实现
+\item 新增 Vue 版分析入口、宿主页和图表封装，形成新的承载结构
+\item 将旧的 TSX 分析页整体迁入 legacy，方便迁移期对照和必要时回退
+\item 补齐 Vue 分析页相关依赖和 lockfile，确保新方案可以稳定构建
+\item 补做分析页中文文案和本地化数据处理，减少迁移后界面表述不统一的问题
+\item 修复助手页 streaming session sync 问题，避免前端会话展示出现错位
+\end{itemize}
+
+\section{Runtime 拆分与文档补齐继续推进：减少主文件堆积，保持结构可追踪}
+
+\textbf{背景}：运行时主文件这几周一直在持续瘦身。本周虽然没有像分析页迁移那样大面积改造，但仍有两类重要工作：一是继续把 Runtime 里的研究接线和报告相关逻辑往外迁；二是同步更新文档、实验说明和周边材料，避免结构已经变化但文档还停留在旧版本。
+
+\textbf{方案说明}：本周按“先迁高频改动区域，再同步快照文档”的顺序继续推进。把 Runtime 中与 research wiring、structured report 相关的部分继续剥离，再把最新结构、实验说明和周报材料同步写入文档。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 继续瘦身 Runtime，剥离 research wiring，减少主文件堆积
+\item 新增 \texttt{structured-report-runtime}，把报告相关运行时逻辑独立成模块
+\item 更新 \texttt{runtime.md}，同步最新拆分边界和运行时快照
+\item 补充与整理实验、MCP、运行时结构和交接相关文档
+\item 提交并归档上一版周报等阶段性材料，降低后续复盘成本
+\end{itemize}
+
+\section{技术债务与限制}
+
+\begin{itemize}
+\item \textbf{车辆报告链路虽然继续完善，但还需要继续回归}：数据源已经切到 MCP，脚本文档和指标也在补齐，但车辆报告的稳定性还需要更多真实样例验证。MCP 交付文档需要包含验收标准和测试用例。
+\item \textbf{报告追问与多轮对话还需要继续验证}：虽然这周把澄清中间态进一步统一到 Router，但报告生成后的追问、补问和业务咨询之间能否长期稳定衔接，还需要继续回归
+\item \textbf{车辆专家实验仍在观察期}：本周已经推进到 CoT 模式对比，但“是否该拆专家”以及“CoT 是否真的有收益”都还没有最终结论
+\item \textbf{澄清中间态刚统一回 Router}：pending clarification 和 request-further-info 已经开始统一，但复杂多轮对话下是否稳定，还需要继续测
+\item \textbf{MCP 对接仍受外部服务质量影响}：虽然这周已经把车辆报告数据源切到 MCP，但数据没有完全接入，接口行为测试比较受局限
+\item \textbf{RAG 已经进入可接入阶段，但检索质量还在优化中}：切块、rewrite 和 rerank 已经补上，真实问答中的收益和误召回情况还要继续评估
+\item \textbf{分析页 Vue 迁移完成的是主体，不是全部收尾}：本周先把大框架切过去，后续还需要继续补细节、做联调和回归
+\item \textbf{Runtime 拆分仍未完成}：虽然主文件继续变薄，但还有一部分上下文管理和业务接线逻辑没有完全迁出
+\item \textbf{规则模板库}：建立常用规则模板，降低配置成本（无限期延后）。
+\item \textbf{本地模型性能估算还没有启动}：还没有基于 token 消耗量去估算本地部署模型后的响应速度、吞吐和资源需求。这件事和当前几条主线相对独立，但后面需要专门安排时间做一次完整评估，避免本地部署阶段再临时补课
+\end{itemize}
+
+\section{下周计划}
+
+\begin{enumerate}
+\item \textbf{继续回归车辆报告链路}：重点验证 MCP 数据源切换后的车辆报告稳定性、指标下钻以及脚本文档与实际输出的一致性
+\item \textbf{继续观察车辆专家 CoT 实验数据}：结合统计与真实会话判断 CoT 模式是否值得继续推进
+\item \textbf{补齐澄清链路多轮回归}：重点看 pending clarification、rule-reply 和补问链路在复杂上下文下是否稳定
+\item \textbf{继续优化 RAG 接入效果}：围绕切块、rewrite、rerank 和 omni 上下文注入继续调优
+\item \textbf{继续处理分析页 Vue 迁移后的收尾问题}：补联调、补细节、补回归
+\item \textbf{继续推进 Runtime 拆分与文档同步}：减少代码结构和文档描述之间的偏差
+\item \textbf{准备 MCP 服务的后备方案}：如果当前 MCP 服务无法满足需求，需要准备后备方案。
+\end{enumerate}
+
+\end{document}

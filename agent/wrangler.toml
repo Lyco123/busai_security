@@ -1,0 +1,25 @@
+name = "bus-agent"
+main = "src/index.ts"
+compatibility_date = "2024-10-01"
+keep_vars = true
+routes = [
+  { pattern = "api.buso.canocache.com/api/agent/*", zone_name = "canocache.com" }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "busdemo"
+database_id = "ac880b80-f277-4ab3-b108-a8cb79a9bbf2"
+
+[vars]
+MCP_SERVER_URL = "https://buso-rpformcp.canocache.com/mcp-servers/aisecurity"
+MCP_ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJvcmdDb2RlIjoiMDAwMTAwMTAwMDAwMDAwOURaN0ciLCJleHAiOjE3Nzk3ODQ3MDQsInVzZXJuYW1lIjoiZ2NpQWRtaW4ifQ.WEomrQKLYf85TGcyCdCRRIQStWPj6tDFgZ8WT8QEPkk"
+OUTPUT_FORMAT = "markdown"
+
+# Debug only. Keep false unless diagnosing upstream model SSE chunking/parser behavior.
+OPENAI_STREAM_DIAGNOSTICS = "false"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+fallthrough = true

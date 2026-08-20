@@ -1,0 +1,186 @@
+\documentclass[UTF8]{ctexart}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\title{Agent开发周报 260513}
+\author{刘德辰}
+\date{2026年5月13日}
+
+\begin{document}
+
+\maketitle
+
+\section{完成无会话报告摘要接口，页面可直接生成 5 类报告}
+
+\textbf{背景}：之前报告生成主要走聊天会话。这个方式适合用户在对话里追问，但不适合页面按钮直接生成报告。页面侧如果还要先建 session、写 message，再等聊天返回，接入成本高，也不方便判断问题到底出在报告生成还是会话状态。
+
+\textbf{方案说明}：本周新增 \texttt{POST /api/agent/reports/summary}，并支持兼容路径 \texttt{POST /api/agent/reports/summary/\{type\}}。接口不创建 \texttt{agent\_sessions}，不写入 \texttt{agent\_messages}，只根据请求字段或显式类型选择对应报告 worker。当前支持驾驶员、车辆、单位、线路、事故调查 5 类报告。前端研究页同步增加报告 API 测试页，方便直接验证请求参数、错误提示和返回结构。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 页面按钮可以直接生成报告，不再依赖聊天会话。
+\item 驾驶员、车辆、单位、线路、事故调查 5 类报告都走同一个接口。
+\item 支持按业务字段自动识别报告类型，也支持 \texttt{id/name/nameOrId/entityId + type} 的通用调用方式。
+\item 缺目标、多个目标冲突、类型不支持等错误都有明确 \texttt{400} 返回。
+\item 增加 \texttt{report-output-format-contract} 脚本，固定 \texttt{OUTPUT\_FORMAT=markdown/json} 的返回格式，避免后续改动破坏前端展示。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{ac1c507}（2026-05-07）add stateless report summary endpoint
+\item \texttt{ff59274}（2026-05-07）add research report api test tab
+\item \texttt{138c423}（2026-05-07）update report api test samples
+\item \texttt{fd700b4}（2026-05-13）add report output format contract
+\end{itemize}
+
+\section{完成单位/事故专家开发，所有报告对应专家管线已全部齐全}
+
+\textbf{背景}：前几周已经有车辆、驾驶员、线路专家，但单位和事故还没有独立专家。用户问单位管理效果、事故原因、事故证据或整改建议时，系统容易落到通用咨询，或者误走正式报告生成。
+
+\textbf{方案说明}：本周新增 \texttt{unit\_expert} 和 \texttt{incident\_expert} 两个 conversational skill，并接入专家注册、router、工具类型、工具校验、上下文构建、结构化查询、chat-service 和 runtime。两个专家都明确只负责咨询和解释，不直接生成完整正式报告；用户明确要单位报告或事故调查报告时，仍走对应 \texttt{generate\_*\_report}。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 单位专家已可承接单位基础信息、风险构成、管理效果、整改建议、下级对象风险等问题。
+\item 事故专家已可承接事故经过、证据解释、原因分析、责任性质、处理进度和整改建议等问题。
+\item 驾驶员、车辆、单位、线路、事故 5 类对象现在都有对应专家。
+\item 正式报告请求和专家咨询请求分得更清楚，减少``问解释却出报告''或``要报告却泛答''的情况。
+\item 专家回答按简单事实、单点解释、综合分析控制长度，不默认展开成长报告。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{a76ba64}（2026-05-11）add unit and incident expert pipelines
+\item \texttt{fffe676}（2026-05-10）tune expert suggestion guidance
+\end{itemize}
+
+\section{补强 router 和 worker 约束，减少时间、字段和查询规划错误}
+
+\textbf{背景}：报告和专家变多后，router 和 worker 的误判会更明显。近期主要问题包括：用户说``今天、本周、最近''时缺少统一时间参照；结构化查询失败后提示不清楚；工具字段和业务字段容易混用；worker 在上下文不足时提前规划查询；部分 OpenAI-compatible 模型对 system message 位置更敏感。
+
+\textbf{方案说明}：本周加入服务端时间上下文，让相对时间问题有统一参照；新增结构化 lookup 错误 responder，让未命中、解析失败、缺数据等情况能给出明确反馈；补充字段对齐、上下文检查和查询规划约束，要求 worker 先确认必要信息，再决定是否调用工具；同时修正 system message 位置，提升 Qwen 兼容性。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item ``今天、本周、最近''等问题有了服务端时间基准。
+\item 查询失败时更容易回到澄清或说明缺什么数据，而不是含糊回答。
+\item worker 会更严格按工具真实字段查询，减少字段名相近导致的错查。
+\item 上下文不足时优先补信息，降低提前查错对象或查错条件的概率。
+\item Qwen 兼容场景的 message 顺序已修正。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{f23bd5f}（2026-05-07）add field alignment guardrail
+\item \texttt{4acc607}（2026-05-08）add server time prompt context
+\item \texttt{a340017}（2026-05-08）add structured lookup error responder
+\item \texttt{7c5ad09}（2026-05-10）add worker context guardrail
+\item \texttt{1bcaf8f}（2026-05-10）add query planning guardrail
+\item \texttt{0a236d4}（2026-05-11）fix system message position for qwen compatibility
+\end{itemize}
+
+\section{完成 \texttt{/chat/stream} 工具调用流式事件，咨询回答可边执行边展示}
+
+\textbf{背景}：之前 \texttt{/chat/stream} 主要返回 assistant 文本增量，工具调用过程基本不可见。用户在咨询场景里只能等最终回答，不知道系统是在生成工具参数、调用工具，还是已经拿到结果正在组织文字。
+
+\textbf{方案说明}：本周新增 \texttt{callOpenAIWithToolsStream}，支持解析模型流式返回里的文本 delta 和 tool\_calls。后端 SSE 在保留原有 \texttt{start/delta/progress/final/error/[DONE]} 的基础上，新增 \texttt{tool\_call\_delta}、\texttt{tool\_call\_ready}、\texttt{tool\_execution\_started}、\texttt{tool\_execution\_completed}、\texttt{tool\_execution\_failed}。前端 \texttt{sendMessageStream} 增加 \texttt{onEvent}，新助手页面会把最近几条工具活动展示在正在生成的 assistant 消息下方。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 咨询类回答可以继续按文本 delta 实时展示。
+\item 前端可以看到工具准备、执行、完成、失败等状态。
+\item 旧前端仍可只处理 \texttt{delta/final/error}，新增事件不影响兼容性。
+\item 工具活动只展示最近几条，避免打断主回答阅读。
+\item 本轮只改 \texttt{consult\_*} 类 conversational 流程；报告生成、规则配置 V2、非流式 \texttt{/chat} 和 \texttt{/reports/summary} 仍保持原有同步或结构化返回方式。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{0894fce}（2026-05-12）wire streamed tool call helper
+\item \texttt{3593afe}（2026-05-12）add assistant progress updates
+\item \texttt{e1ab1ea}（2026-05-12）stream assistant stage updates
+\item \texttt{6cde699}（2026-05-12）document streaming protocol
+\end{itemize}
+
+\section{增加流式诊断和直通探针，定位首 token 慢和输出颗粒大的原因}
+
+\textbf{背景}：流式接入后，还需要判断``第一个可见 token 晚''、``输出一块一块出来''到底是哪一层造成的。可能是上游模型本来就慢，也可能是后端 SSE parser 拆事件慢，还可能是后端已经有 delta 但前端展示不够及时。
+
+\textbf{方案说明}：本周增加 \texttt{OPENAI\_STREAM\_DIAGNOSTICS} 开关，默认关闭，只在排查时输出 \texttt{upstream-chunk}、\texttt{upstream-event}、\texttt{text-delta} 三类日志。随后新增 \texttt{POST /api/agent/chat/direct-stream-probe}，绕过 session、router、工具调用和 agent 聚合，直接把供应商原始 SSE 转发到浏览器。前端新增 \texttt{/research/stream-probe} 页面，记录首字节、首 event、首正文 delta、chunk 数、事件数、delta 样本和间隔样本。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 如果首字节本身就晚，可以判断主要慢在上游模型或网络。
+\item 如果首 event 很早但首正文晚，说明供应商早期事件没有可见文本。
+\item 如果直通探针里的 text delta 本来就少且大，就不应把输出颗粒问题归因到 agent。
+\item 同一个 prompt 可以分别跑直通探针和正常 \texttt{/chat/stream}，对比上游基线和完整 agent 流程的差异。
+\item 文档里已写清诊断开关的启用、判读和后续拆除方式。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{e23e0aa}（2026-05-13）add streaming diagnostics
+\item \texttt{0152911}（2026-05-13）reduce streaming diagnostic overhead
+\item \texttt{8970434}（2026-05-13）Revert ``260513 reduce streaming diagnostic overhead''
+\item \texttt{e9cbee2}（2026-05-13）add direct stream probe
+\item \texttt{0ea3874}（2026-05-13）isolate stream probe page
+\end{itemize}
+
+\section{完成精神测评页面改造：ClickHouse、企业微信登录、周完成记录和 GPL 合规}
+
+\textbf{背景}：\texttt{human-benchmark-master} 这边本周也做了一批工作，目标是把原始开源项目改造成可部署、可接入企业微信、可记录每周完成情况的版本。原项目依赖 MongoDB、账号密码/邮箱登录和部分前端 demo，不适合当前部署和企业微信入口使用。
+
+\textbf{方案说明}：本周把后端数据层从 MongoDB 改为 ClickHouse，删除旧 mailer 和 CF Pages Functions demo，补充 ClickHouse 初始化 SQL、PM2 和 nginx 部署配置。登录方式改为企业微信 OAuth：前端在企业微信环境中自动跳转授权，后端用 code 换取企业微信 userid，并以 userid 创建或查找本地用户。新增 \texttt{week\_completions} 表和接口，用于记录用户本周完成过哪些测试；匿名用户先用临时 ID 保存记录，登录后可迁移到企业微信用户。最后恢复页脚和版权说明，补充 GPLv3、原作者署名和修改版声明。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 后端已从 MongoDB 迁到 ClickHouse，用户、成绩、文章、单词、公告、周完成记录都走 ClickHouse 表。
+\item 新增 \texttt{scripts/init-db.sql}，可一次性创建数据库、表和种子数据。
+\item 新增 \texttt{DEPLOY.md}、\texttt{deploy/nginx.conf}、\texttt{deploy/pm2.config.js}，部署步骤更完整。
+\item 登录改为企业微信 OAuth，不再使用密码和邮箱字段。
+\item 前端进入企业微信环境后会自动授权登录，URL 带 \texttt{code} 时自动完成回调登录。
+\item 新增本周完成记录：保存成绩后同步写入周完成记录，首页可显示本周已完成/未完成测试。
+\item 匿名用户可以先做测试，企业微信登录后把临时完成记录迁移到正式用户。
+\item 恢复 \texttt{FooterBar}，页面展示原作者、GPLv3 许可证和修改版说明，降低开源合规风险。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{96424ab}（2026-05-09）Migrate backend from MongoDB to ClickHouse and remove mailer module
+\item \texttt{2c1fa6c}（2026-05-10）Replace auth with WeCom OAuth and remove password/email fields
+\item \texttt{84c7f66}（2026-05-13）Add GPLv3 compliance: restore FooterBar with author credit, GPL notice and modification disclaimer
+\end{itemize}
+
+\section{补充接口、流式协议和测试页面文档}
+
+\begin{itemize}
+\item API 文档补充 \texttt{POST /reports/summary} 的访问范围、参数、自动识别规则、显式类型、响应结构、错误规则和快速开始顺序。
+\item 新增流式协议与前端适配说明，说明新增 SSE 事件、LLM client 改动、前端消费方式、兼容性和当前改造范围。
+\item 新增未改动管线说明，明确 \texttt{rule\_asker} V2、报告生成、非流式 \texttt{/chat}、报告摘要接口、旧助手页、retrieval/OCR/KB 本轮没有做 token streaming。
+\item 新增 OpenAI 上游流式诊断说明和 direct stream probe 文档。
+\item 前端研究区新增报告 API 测试页和流式探针页，分别用于报告接口联调和流式问题排查。
+\end{itemize}
+
+\textbf{相关提交（日期）}：本节为文档补充与联调说明，不集中列举单一提交。
+
+\section{下周计划}
+
+\begin{enumerate}
+\item 对 5 类专家做系统回归，重点验证单位、事故两个新专家在多轮追问、报告追问、对象切换和 \texttt{rule\_exit} 场景下是否稳定。
+
+\item 对 \texttt{consult\_*} 流式体验做验收，检查事件顺序、首 token 延迟、工具状态展示密度和失败提示，并用 direct stream probe 判断问题是否来自上游。
+
+\item 继续完善报告摘要接口测试样本，固化 \texttt{OUTPUT\_FORMAT} 契约脚本，验证页面按钮直接生成报告时的加载、错误提示和结果展示。
+
+\item 评估下一批 streaming 改造对象。优先考虑自然语言 worker，例如 \texttt{rule\_reply} 或非 V2 \texttt{rule\_asker}；报告生成仍建议先做数据获取进度事件，再考虑摘要/解读阶段流式输出。
+
+\item 把字段对齐、服务端时间、lookup 失败、查询规划、Qwen message 顺序等本周修正沉淀成可复用测试或 manual 用例。
+\end{enumerate}
+
+\textbf{相关提交（日期）}：本节为下周计划，无对应本周单一提交。
+
+\end{document}

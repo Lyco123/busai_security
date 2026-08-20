@@ -1,0 +1,1884 @@
+import { isRecord } from '../../shared/guards';
+import { safeJsonParse } from '../../shared/json';
+import { collapseWhitespace } from '../../shared/text';
+import { getNestedValue } from '../../shared/object-path';
+import { readFirstStringAtPaths } from './structured-report-normalizers';
+import type { WorkerToolCall } from './worker-runner';
+
+export type StructuredLookupToolName =
+  | 'generate_driver_report'
+  | 'generate_vehicle_report'
+  | 'generate_route_report'
+  | 'generate_accident_investigation_report';
+
+export type DriverLookupCandidate = {
+  id: string;
+  name: string;
+  identifier: string | null;
+};
+
+export type VehicleLookupCandidate = {
+  id: string;
+  name: string;
+  identifier: string | null;
+  vehicle_id: string | null;
+};
+
+export type RouteLookupCandidate = {
+  id: string;
+  name: string;
+  identifier: string | null;
+  route_id: string | null;
+  route_name: string | null;
+};
+
+export type IncidentLookupCandidate = {
+  id: string;
+  name: string;
+  identifier: string | null;
+  incident_id: string | null;
+  accident_date: string | null;
+};
+
+export type DriverLookupResolution =
+  | {
+      kind: 'resolved';
+      query: string;
+      candidate: DriverLookupCandidate;
+      data: Record<string, unknown>;
+      matchType: 'exact';
+    }
+  | {
+      kind: 'clarify';
+      query: string;
+      reason: 'too_short' | 'ambiguous' | 'same_name' | 'single_candidate' | 'not_found';
+      candidates: DriverLookupCandidate[];
+    };
+
+export type VehicleLookupResolution =
+  | {
+      kind: 'resolved';
+      query: string;
+      candidate: VehicleLookupCandidate;
+      data: Record<string, unknown>;
+      matchType: 'exact';
+    }
+  | {
+      kind: 'clarify';
+      query: string;
+      reason: 'too_short' | 'ambiguous' | 'single_candidate' | 'not_found';
+      candidates: VehicleLookupCandidate[];
+    };
+
+export type RouteLookupResolution =
+  | {
+      kind: 'resolved';
+      query: string;
+      candidate: RouteLookupCandidate;
+      data: Record<string, unknown>;
+      matchType: 'exact' | 'normalized';
+    }
+  | {
+      kind: 'clarify';
+      query: string;
+      reason: 'too_short' | 'ambiguous' | 'single_candidate' | 'not_found';
+      candidates: RouteLookupCandidate[];
+    };
+
+export type IncidentLookupResolution =
+  | {
+      kind: 'resolved';
+      query: string;
+      candidate: IncidentLookupCandidate;
+      data: Record<string, unknown>;
+      matchType: 'exact' | 'normalized';
+    }
+  | {
+      kind: 'clarify';
+      query: string;
+      reason: 'too_short' | 'ambiguous' | 'single_candidate' | 'not_found';
+      candidates: IncidentLookupCandidate[];
+    };
+
+export type PendingDriverLookupState = {
+  kind: 'driver_report_lookup';
+  reason: 'missing_name' | 'too_short' | 'ambiguous' | 'same_name' | 'single_candidate' | 'not_found';
+  query: string;
+  candidates: DriverLookupCandidate[];
+};
+
+export type PendingVehicleLookupState = {
+  kind: 'vehicle_report_lookup';
+  reason: 'missing_vehicle' | 'too_short' | 'ambiguous' | 'single_candidate' | 'not_found';
+  query: string;
+  candidates: VehicleLookupCandidate[];
+};
+
+export type PendingRouteLookupState = {
+  kind: 'route_report_lookup';
+  reason: 'missing_route' | 'too_short' | 'ambiguous' | 'single_candidate' | 'not_found';
+  query: string;
+  candidates: RouteLookupCandidate[];
+};
+
+export type PendingIncidentLookupState = {
+  kind: 'incident_report_lookup';
+  reason: 'missing_incident' | 'too_short' | 'ambiguous' | 'single_candidate' | 'not_found';
+  query: string;
+  candidates: IncidentLookupCandidate[];
+};
+
+export type PendingStructuredLookupState =
+  | PendingDriverLookupState
+  | PendingVehicleLookupState
+  | PendingRouteLookupState
+  | PendingIncidentLookupState;
+
+const INTERNAL_STRUCTURED_TOOL_PREFIX = '__structured_report__:';
+
+const GENERIC_PLACEHOLDER_ARGS = new Set([
+  'unknown',
+  'none',
+  'null',
+  'na',
+  'n/a',
+  'xxx',
+  'xxxx',
+  '待确认',
+  '未知',
+  '某人',
+  '某车',
+  '某线路',
+  '某事故',
+]);
+
+const DRIVER_PLACEHOLDER_ARGS = new Set([
+  'driver',
+  'drivername',
+  'driver_name',
+  '驾驶员',
+  '司机',
+  '姓名',
+  '名字',
+  '工号',
+]);
+
+const VEHICLE_PLACEHOLDER_ARGS = new Set([
+  'vehicle',
+  'vehicleid',
+  'vehicle_id',
+  '车辆',
+  '车牌',
+  '车牌号',
+  '车辆id',
+  '车辆编号',
+]);
+
+const ROUTE_PLACEHOLDER_ARGS = new Set([
+  'route',
+  'routename',
+  'route_name',
+  'routeid',
+  'route_id',
+  '线路',
+  '线路名称',
+  '线路编号',
+]);
+
+const INCIDENT_PLACEHOLDER_ARGS = new Set([
+  'incident',
+  'incidentid',
+  'incident_id',
+  'accident',
+  '事故',
+  '事故编号',
+  '事故id',
+  '事件id',
+]);
+
+const AFFIRMATIVE_TOKENS = new Set([
+  '是',
+  '是的',
+  '对',
+  '对的',
+  '没错',
+  '确认',
+  '确认是',
+  '就这个',
+  '就是这个',
+  '可以',
+  '好的',
+  'yes',
+  'ok',
+]);
+
+function normalizeArgToken(value: string): string {
+  return value
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s"'`“”‘’《》〈〉「」『』【】[\]{}()<>·,，。:：;；、/\\|]+/g, '')
+    .replace(/[-_]/g, '');
+}
+
+function cleanExtractedEntityToken(value: string): string {
+  return value
+    .trim()
+    .replace(/^[\s"'`“”‘’《》〈〉「」『』【】[(<]+/u, '')
+    .replace(/[\s"'`“”‘’》〉」』】)>.,，。:：;；、]+$/u, '')
+    .trim();
+}
+
+function looksLikeIntentPhrase(value: string): boolean {
+  return /(请|帮我|生成|查看|查询|分析|报告|画像|调查|整改|look up|report|analysis)/i.test(
+    value.trim()
+  );
+}
+
+function isGenericPlaceholderArg(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  const normalized = normalizeArgToken(trimmed);
+  if (!normalized) return true;
+  if (GENERIC_PLACEHOLDER_ARGS.has(normalized)) return true;
+  if (/^x{2,}$/i.test(normalized)) return true;
+  if (/^\{.+\}$/.test(trimmed) || /^<.+>$/.test(trimmed) || /^\[.+\]$/.test(trimmed)) return true;
+  return false;
+}
+
+function containsReportKeyword(content: string): boolean {
+  return /(报告|画像|分析|report|profile|summary)/i.test(content);
+}
+
+export function looksLikeDriverReportRequest(content: string): boolean {
+  const normalized = collapseWhitespace(content);
+  return /(驾驶员|司机|driver)/i.test(normalized) && containsReportKeyword(normalized);
+}
+
+export function looksLikeVehicleReportRequest(content: string): boolean {
+  const normalized = collapseWhitespace(content);
+  return /(车辆|车牌|vehicle)/i.test(normalized) && containsReportKeyword(normalized);
+}
+
+export function looksLikeRouteReportRequest(content: string): boolean {
+  const normalized = collapseWhitespace(content);
+  return /(线路|route|line)/i.test(normalized) && containsReportKeyword(normalized);
+}
+
+export function looksLikeAccidentInvestigationReportRequest(content: string): boolean {
+  const normalized = collapseWhitespace(content);
+  return (
+    /(事故|incident|accident)/i.test(normalized) &&
+    /(调查|整改|investigation|report|复盘|分析)/i.test(normalized)
+  );
+}
+
+function parseStructuredToolCallRecord(value: unknown): WorkerToolCall | null {
+  if (!isRecord(value)) return null;
+  const tool = value.tool;
+  const args = value.args;
+  if (
+    tool !== 'generate_driver_report' &&
+    tool !== 'generate_vehicle_report' &&
+    tool !== 'generate_route_report' &&
+    tool !== 'generate_accident_investigation_report'
+  ) {
+    return null;
+  }
+  if (!isRecord(args)) return null;
+  return { tool, args };
+}
+
+function parseInternalStructuredToolCall(content: string): WorkerToolCall | null {
+  if (!content.startsWith(INTERNAL_STRUCTURED_TOOL_PREFIX)) {
+    return null;
+  }
+  return parseStructuredToolCallRecord(
+    safeJsonParse(content.slice(INTERNAL_STRUCTURED_TOOL_PREFIX.length))
+  );
+}
+
+function encodeInternalStructuredToolCall(call: WorkerToolCall): string {
+  return `${INTERNAL_STRUCTURED_TOOL_PREFIX}${JSON.stringify(call)}`;
+}
+
+function extractCandidateByPatterns(
+  content: string,
+  patterns: RegExp[],
+  invalid: (value: string) => boolean
+): string | null {
+  for (const pattern of patterns) {
+    const match = content.match(pattern);
+    const candidate = cleanExtractedEntityToken(match?.[1] ?? '');
+    if (candidate && !invalid(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function startsWithIntentLead(value: string): boolean {
+  return /^(?:请帮我|帮我|生成|查看|分析|查询|请查询|请查看|请生成|look\s*up|report|analysis)/i.test(
+    value.trim()
+  );
+}
+
+function isInvalidDriverNameArg(value: string): boolean {
+  const trimmed = value.trim();
+  const normalized = normalizeArgToken(trimmed);
+  if (isGenericPlaceholderArg(trimmed)) return true;
+  if (DRIVER_PLACEHOLDER_ARGS.has(normalized)) return true;
+  if (startsWithIntentLead(trimmed)) return true;
+  if (looksLikeIntentPhrase(trimmed) && !/^[\u4e00-\u9fa5]{2,4}$/.test(trimmed)) return true;
+  return false;
+}
+
+function isInvalidVehicleIdArg(value: string): boolean {
+  const trimmed = value.trim();
+  const normalized = normalizeArgToken(trimmed);
+  if (isGenericPlaceholderArg(trimmed)) return true;
+  if (VEHICLE_PLACEHOLDER_ARGS.has(normalized)) return true;
+  if (
+    /(\u96c6\u56e2|\u516c\u53f8|\u603b\u516c\u53f8|\u5206\u516c\u53f8|\u8f66\u961f|\u8f66\u961f\u96c6\u56e2)/.test(
+      trimmed
+    ) ||
+    normalized.includes('group') ||
+    normalized.includes('company') ||
+    normalized.includes('fleet')
+  ) {
+    return true;
+  }
+  if (
+    normalized.includes('vehicletype') ||
+    normalized.includes('bustype') ||
+    normalized.includes('usenature') ||
+    normalized.includes('vehicletypelist') ||
+    normalized === 'type' ||
+    normalized === 'list' ||
+    normalized === 'count' ||
+    normalized === 'stat' ||
+    normalized === 'stats' ||
+    trimmed.includes('类型') ||
+    trimmed.includes('使用性质') ||
+    trimmed.includes('统计') ||
+    trimmed.includes('列表')
+  ) {
+    return true;
+  }
+  if (startsWithIntentLead(trimmed)) return true;
+  if (looksLikeIntentPhrase(trimmed) && !/^[A-Za-z0-9\u4e00-\u9fa5-]{2,20}$/.test(trimmed)) return true;
+  return false;
+}
+
+function isInvalidRouteNameArg(value: string): boolean {
+  const trimmed = value.trim();
+  const normalized = normalizeArgToken(trimmed);
+  if (isGenericPlaceholderArg(trimmed)) return true;
+  if (ROUTE_PLACEHOLDER_ARGS.has(normalized)) return true;
+  if (startsWithIntentLead(trimmed)) return true;
+  if (looksLikeIntentPhrase(trimmed) && !/^[A-Za-z0-9\u4e00-\u9fa5-]{2,32}$/.test(trimmed)) return true;
+  return false;
+}
+
+function isInvalidIncidentArg(value: string): boolean {
+  const trimmed = value.trim();
+  const normalized = normalizeArgToken(trimmed);
+  if (isGenericPlaceholderArg(trimmed)) return true;
+  if (INCIDENT_PLACEHOLDER_ARGS.has(normalized)) return true;
+  if (startsWithIntentLead(trimmed)) return true;
+  if (
+    looksLikeIntentPhrase(trimmed) &&
+    !/^[A-Za-z0-9\u4e00-\u9fa5/_-]{2,64}$/.test(trimmed) &&
+    !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isLikelyIncompleteDriverArg(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  if (/^[\u4e00-\u9fa5]$/.test(trimmed)) return true;
+  const normalized = normalizeArgToken(trimmed);
+  return /^\d{1,3}$/.test(normalized) || /^[a-z]\d{0,2}$/i.test(normalized);
+}
+
+function isLikelyIncompleteVehicleArg(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  const normalized = normalizeArgToken(trimmed);
+  if (normalized.length <= 1) return true;
+  if (/^\d{1,3}$/.test(normalized)) return true;
+  if (/^[a-z]{1,2}\d{0,2}$/i.test(normalized)) return true;
+  return false;
+}
+
+function isLikelyIncompleteRouteArg(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  const normalized = normalizeArgToken(trimmed);
+  if (normalized.length <= 1) return true;
+  return normalized === '线路' || normalized === 'route' || normalized === 'line';
+}
+
+function isLikelyIncompleteIncidentArg(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  const normalized = normalizeArgToken(trimmed);
+  if (/^\d{1,3}$/.test(normalized)) return true;
+  return normalized.length <= 1;
+}
+
+function extractDriverReportEntityArg(content: string): string | null {
+  return extractCandidateByPatterns(
+    content,
+    [
+      /(?:驾驶员|司机|driver)(?:姓名|名字|工号)?\s*[:：]\s*["“]?([^"”'\n，。,：:]{1,32})/i,
+      /(?:请帮我|帮我|请)?(?:生成|查看|分析|查询)\s*["“]?([^"”'\n，。,：:]{1,32}?)["”]?(?:的)?(?:驾驶员|司机).{0,8}(?:报告|画像|分析)/i,
+      /^\s*["“]?(?!生成|查看|分析|查询|请帮我|帮我|请)([^"”'\n，。,：:]{1,32}?)["”]?(?:的)?(?:驾驶员|司机).{0,8}(?:报告|画像|分析)/i,
+    ],
+    isInvalidDriverNameArg
+  );
+}
+
+function extractVehicleReportEntityArg(content: string): string | null {
+  return extractCandidateByPatterns(
+    content,
+    [
+      /(?:车辆|车牌|vehicle)(?:编号|id|ID|车牌号)?\s*[:：]\s*["“]?([^"”'\n，。,：:]{1,40})/i,
+      /(?:请帮我|帮我|请)?(?:生成|查看|分析|查询)\s*["“]?([^"”'\n，。,：:]{1,40}?)["”]?(?:的)?(?:车辆|车牌).{0,8}(?:报告|画像|分析)/i,
+      /^\s*["“]?(?!生成|查看|分析|查询|请帮我|帮我|请)([^"”'\n，。,：:]{1,40}?)["”]?(?:的)?(?:车辆|车牌).{0,8}(?:报告|画像|分析)/i,
+    ],
+    isInvalidVehicleIdArg
+  );
+}
+
+function extractRouteReportEntityArg(content: string): string | null {
+  return extractCandidateByPatterns(
+    content,
+    [
+      /(?:线路|route|line)(?:名称|编号|id|ID)?\s*[:：]\s*["“]?([^"”'\n，。,：:]{1,40})/i,
+      /(?:请帮我|帮我|请)?(?:生成|查看|分析|查询)\s*["“]?([^"”'\n，。,：:]{1,40}?)["”]?(?:的)?(?:线路|route|line).{0,8}(?:报告|画像|分析)/i,
+      /^\s*["“]?(?!生成|查看|分析|查询|请帮我|帮我|请)([^"”'\n，。,：:]{1,40}?)["”]?(?:的)?(?:线路|route|line).{0,8}(?:报告|画像|分析)/i,
+    ],
+    isInvalidRouteNameArg
+  );
+}
+
+function extractIncidentReportEntityArg(content: string): string | null {
+  return extractCandidateByPatterns(
+    content,
+    [
+      /(?:事故|incident|accident)(?:编号|id|ID|日期|标题)?\s*[:：]\s*["“]?([^"”'\n，。,：:]{1,64})/i,
+      /(?:请帮我|帮我|请)?(?:生成|查看|分析|查询)\s*["“]?([^"”'\n，。,：:]{1,64}?)["”]?(?:的)?(?:事故|incident|accident).{0,10}(?:调查|整改|报告|复盘|分析)/i,
+      /^\s*["“]?(?!生成|查看|分析|查询|请帮我|帮我|请)([^"”'\n，。,：:]{1,64}?)["”]?(?:的)?(?:事故|incident|accident).{0,10}(?:调查|整改|报告|复盘|分析)/i,
+    ],
+    isInvalidIncidentArg
+  );
+}
+
+export function extractStructuredReportToolCall(content: string): WorkerToolCall | null {
+  const internal = parseInternalStructuredToolCall(content);
+  if (internal) {
+    return internal;
+  }
+
+  const parsedJson = parseStructuredToolCallRecord(safeJsonParse(content));
+  if (parsedJson) {
+    return parsedJson;
+  }
+
+  if (looksLikeDriverReportRequest(content)) {
+    const driverName = extractDriverReportEntityArg(content);
+    if (driverName) {
+      return {
+        tool: 'generate_driver_report',
+        args: { driver_name: driverName },
+      };
+    }
+  }
+
+  if (looksLikeVehicleReportRequest(content)) {
+    const vehicleId = extractVehicleReportEntityArg(content);
+    if (vehicleId) {
+      return {
+        tool: 'generate_vehicle_report',
+        args: { vehicle_id: vehicleId },
+      };
+    }
+  }
+
+  if (looksLikeAccidentInvestigationReportRequest(content)) {
+    const incidentId = extractIncidentReportEntityArg(content);
+    if (incidentId) {
+      return {
+        tool: 'generate_accident_investigation_report',
+        args: { incident_id: incidentId },
+      };
+    }
+  }
+
+  if (looksLikeRouteReportRequest(content)) {
+    const routeName = extractRouteReportEntityArg(content);
+    if (routeName) {
+      return {
+        tool: 'generate_route_report',
+        args: { route_name: routeName },
+      };
+    }
+  }
+
+  return null;
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  if (left === right) return 0;
+  if (!left) return right.length;
+  if (!right) return left.length;
+
+  const rows = left.length + 1;
+  const cols = right.length + 1;
+  const dp: number[][] = Array.from({ length: rows }, () => Array<number>(cols).fill(0));
+
+  for (let row = 0; row < rows; row += 1) dp[row][0] = row;
+  for (let col = 0; col < cols; col += 1) dp[0][col] = col;
+
+  for (let row = 1; row < rows; row += 1) {
+    for (let col = 1; col < cols; col += 1) {
+      const cost = left[row - 1] === right[col - 1] ? 0 : 1;
+      dp[row][col] = Math.min(
+        dp[row - 1][col] + 1,
+        dp[row][col - 1] + 1,
+        dp[row - 1][col - 1] + cost
+      );
+    }
+  }
+
+  return dp[left.length][right.length];
+}
+
+function scoreByTokens(query: string, tokens: string[], fuzzyThreshold = 3): number {
+  const normalizedQuery = normalizeArgToken(query);
+  if (!normalizedQuery) return Number.NEGATIVE_INFINITY;
+
+  let score = 0;
+  for (const token of tokens.map((item) => normalizeArgToken(item)).filter(Boolean)) {
+    if (token === normalizedQuery) return 1000;
+    if (token.startsWith(normalizedQuery)) score = Math.max(score, 220);
+    if (token.includes(normalizedQuery)) score = Math.max(score, 180);
+    if (normalizedQuery.includes(token) && token.length >= 2) score = Math.max(score, 150);
+    if (normalizedQuery.length >= fuzzyThreshold && token.length >= fuzzyThreshold) {
+      const distance = levenshteinDistance(normalizedQuery, token);
+      if (distance === 1) score = Math.max(score, 140);
+      if (distance === 2 && normalizedQuery.length >= 4) score = Math.max(score, 90);
+    }
+  }
+  return score;
+}
+
+function dedupeCandidates<T extends { id: string }>(candidates: T[]): T[] {
+  const seen = new Set<string>();
+  const next: T[] = [];
+  for (const candidate of candidates) {
+    const key = candidate.id.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    next.push(candidate);
+  }
+  return next;
+}
+
+function parseProfileData(raw: string): Record<string, unknown> {
+  const parsed = safeJsonParse(raw);
+  return isRecord(parsed) ? parsed : {};
+}
+
+function buildDriverData(
+  row: { id: string; name: string; identifier: string | null; data: string }
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier,
+    ...parseProfileData(row.data),
+  };
+}
+
+function buildVehicleData(
+  row: {
+    id: string;
+    name: string;
+    identifier: string | null;
+    vehicle_id: string | null;
+    data: string;
+  }
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier,
+    vehicle_id: row.vehicle_id,
+    ...parseProfileData(row.data),
+  };
+}
+
+function buildRouteData(
+  row: {
+    id: string;
+    name: string;
+    identifier: string | null;
+    route_id: string | null;
+    route_name: string | null;
+    data: string;
+  }
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier,
+    route_id: row.route_id,
+    route_name: row.route_name,
+    ...parseProfileData(row.data),
+  };
+}
+
+function buildIncidentData(
+  row: {
+    id: string;
+    name: string;
+    identifier: string | null;
+    incident_id: string | null;
+    accident_date: string | null;
+    data: string;
+  }
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier,
+    incident_id: row.incident_id,
+    accident_date: row.accident_date,
+    ...parseProfileData(row.data),
+  };
+}
+
+function buildDriverCandidate(row: {
+  id: string;
+  name: string;
+  identifier: string | null;
+}): DriverLookupCandidate {
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier,
+  };
+}
+
+function buildVehicleCandidate(row: {
+  id: string;
+  name: string;
+  identifier: string | null;
+  vehicle_id: string | null;
+}): VehicleLookupCandidate {
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier,
+    vehicle_id: row.vehicle_id,
+  };
+}
+
+function buildRouteCandidate(row: {
+  id: string;
+  name: string;
+  identifier: string | null;
+  route_id: string | null;
+  route_name: string | null;
+}): RouteLookupCandidate {
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier,
+    route_id: row.route_id,
+    route_name: row.route_name,
+  };
+}
+
+function buildIncidentCandidate(row: {
+  id: string;
+  name: string;
+  identifier: string | null;
+  incident_id?: string | null;
+  accident_date: string | null;
+}): IncidentLookupCandidate {
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier,
+    incident_id: row.incident_id ?? row.identifier ?? row.id,
+    accident_date: row.accident_date,
+  };
+}
+
+export async function resolveDriverLookup(
+  db: any,
+  rawQuery: string
+): Promise<DriverLookupResolution> {
+  const query = cleanExtractedEntityToken(rawQuery);
+  if (isLikelyIncompleteDriverArg(query)) {
+    return { kind: 'clarify', query, reason: 'too_short', candidates: [] };
+  }
+
+  const exactMatches: { results: Array<{ id: string; name: string; identifier: string | null; data: string }> } = await db
+    .prepare(
+      'SELECT id, name, identifier, data FROM agent_profiles WHERE kind = ? AND (id = ? OR name = ? OR identifier = ?) ORDER BY identifier, id'
+    )
+    .bind('driver', query, query, query)
+    .all();
+
+  if (exactMatches.results.length === 1) {
+    const exact = exactMatches.results[0];
+    return {
+      kind: 'resolved',
+      query,
+      candidate: buildDriverCandidate(exact),
+      data: buildDriverData(exact),
+      matchType: 'exact',
+    };
+  }
+
+  if (exactMatches.results.length > 1) {
+    return {
+      kind: 'clarify',
+      query,
+      reason: 'same_name',
+      candidates: exactMatches.results.map(buildDriverCandidate),
+    };
+  }
+
+  const fuzzyMatches: { results: Array<{ id: string; name: string; identifier: string | null }> } = await db
+    .prepare(
+      'SELECT id, name, identifier FROM agent_profiles WHERE kind = ? AND (name LIKE ? OR identifier LIKE ? OR id LIKE ?) ORDER BY name LIMIT 8'
+    )
+    .bind('driver', `%${query}%`, `%${query}%`, `%${query}%`)
+    .all();
+
+  const allDrivers: { results: Array<{ id: string; name: string; identifier: string | null }> } = await db
+    .prepare('SELECT id, name, identifier FROM agent_profiles WHERE kind = ? ORDER BY name')
+    .bind('driver')
+    .all();
+
+  const rankedCandidates = allDrivers.results
+    .map((item) => ({
+      candidate: buildDriverCandidate(item),
+      score: scoreByTokens(query, [item.name, item.identifier ?? '', item.id], 2),
+    }))
+    .filter((item) => item.score >= 120)
+    .sort((left, right) => right.score - left.score)
+    .map((item) => item.candidate);
+
+  const candidates = dedupeCandidates([
+    ...fuzzyMatches.results.map(buildDriverCandidate),
+    ...rankedCandidates,
+  ]).slice(0, 4);
+
+  if (candidates.length > 1) {
+    return { kind: 'clarify', query, reason: 'ambiguous', candidates };
+  }
+
+  if (candidates.length === 1) {
+    return { kind: 'clarify', query, reason: 'single_candidate', candidates };
+  }
+
+  return { kind: 'clarify', query, reason: 'not_found', candidates: [] };
+}
+
+export async function resolveVehicleLookup(
+  db: any,
+  rawQuery: string
+): Promise<VehicleLookupResolution> {
+  const query = cleanExtractedEntityToken(rawQuery);
+  if (isLikelyIncompleteVehicleArg(query)) {
+    return { kind: 'clarify', query, reason: 'too_short', candidates: [] };
+  }
+
+  const exactMatches: {
+    results: Array<{
+      id: string;
+      name: string;
+      identifier: string | null;
+      vehicle_id: string | null;
+      data: string;
+    }>;
+  } = await db
+    .prepare(
+      "SELECT id, name, identifier, json_extract(data, '$.basic.vehicle_id') as vehicle_id, data FROM agent_profiles WHERE kind = ? AND (id = ? OR name = ? OR identifier = ? OR json_extract(data, '$.basic.vehicle_id') = ? OR json_extract(data, '$.basic.plate_number') = ?) ORDER BY identifier, id"
+    )
+    .bind('vehicle', query, query, query, query, query)
+    .all();
+
+  if (exactMatches.results.length === 1) {
+    const exact = exactMatches.results[0];
+    return {
+      kind: 'resolved',
+      query,
+      candidate: buildVehicleCandidate(exact),
+      data: buildVehicleData(exact),
+      matchType: 'exact',
+    };
+  }
+
+  if (exactMatches.results.length > 1) {
+    return {
+      kind: 'clarify',
+      query,
+      reason: 'ambiguous',
+      candidates: exactMatches.results.map(buildVehicleCandidate),
+    };
+  }
+
+  const fuzzyMatches: {
+    results: Array<{ id: string; name: string; identifier: string | null; vehicle_id: string | null }>;
+  } = await db
+    .prepare(
+      "SELECT id, name, identifier, json_extract(data, '$.basic.vehicle_id') as vehicle_id FROM agent_profiles WHERE kind = ? AND (name LIKE ? OR identifier LIKE ? OR id LIKE ? OR json_extract(data, '$.basic.vehicle_id') LIKE ? OR json_extract(data, '$.basic.plate_number') LIKE ?) ORDER BY name LIMIT 8"
+    )
+    .bind('vehicle', `%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`)
+    .all();
+
+  const allVehicles: {
+    results: Array<{ id: string; name: string; identifier: string | null; vehicle_id: string | null }>;
+  } = await db
+    .prepare(
+      "SELECT id, name, identifier, json_extract(data, '$.basic.vehicle_id') as vehicle_id FROM agent_profiles WHERE kind = ? ORDER BY name"
+    )
+    .bind('vehicle')
+    .all();
+
+  const rankedCandidates = allVehicles.results
+    .map((item) => ({
+      candidate: buildVehicleCandidate(item),
+      score: scoreByTokens(query, [item.name, item.identifier ?? '', item.vehicle_id ?? '', item.id], 3),
+    }))
+    .filter((item) => item.score >= 150)
+    .sort((left, right) => right.score - left.score)
+    .map((item) => item.candidate);
+
+  const candidates = dedupeCandidates([
+    ...fuzzyMatches.results.map(buildVehicleCandidate),
+    ...rankedCandidates,
+  ]).slice(0, 4);
+
+  if (candidates.length > 1) {
+    return { kind: 'clarify', query, reason: 'ambiguous', candidates };
+  }
+
+  if (candidates.length === 1) {
+    return { kind: 'clarify', query, reason: 'single_candidate', candidates };
+  }
+
+  return { kind: 'clarify', query, reason: 'not_found', candidates: [] };
+}
+
+export async function resolveRouteLookup(
+  db: any,
+  rawQuery: string
+): Promise<RouteLookupResolution> {
+  const query = cleanExtractedEntityToken(rawQuery);
+  if (isLikelyIncompleteRouteArg(query)) {
+    return { kind: 'clarify', query, reason: 'too_short', candidates: [] };
+  }
+
+  const exactMatches: {
+    results: Array<{
+      id: string;
+      name: string;
+      identifier: string | null;
+      route_id: string | null;
+      route_name: string | null;
+      data: string;
+    }>;
+  } = await db
+    .prepare(
+      "SELECT id, name, identifier, json_extract(data, '$.basic.route_id') as route_id, json_extract(data, '$.basic.route_name') as route_name, data FROM agent_profiles WHERE kind = ? AND (id = ? OR name = ? OR identifier = ? OR json_extract(data, '$.basic.route_id') = ? OR json_extract(data, '$.basic.route_name') = ?) ORDER BY identifier, id"
+    )
+    .bind('route', query, query, query, query, query)
+    .all();
+
+  if (exactMatches.results.length === 1) {
+    const exact = exactMatches.results[0];
+    return {
+      kind: 'resolved',
+      query,
+      candidate: buildRouteCandidate(exact),
+      data: buildRouteData(exact),
+      matchType: 'exact',
+    };
+  }
+
+  if (exactMatches.results.length > 1) {
+    return {
+      kind: 'clarify',
+      query,
+      reason: 'ambiguous',
+      candidates: exactMatches.results.map(buildRouteCandidate),
+    };
+  }
+
+  const fuzzyMatches: {
+    results: Array<{
+      id: string;
+      name: string;
+      identifier: string | null;
+      route_id: string | null;
+      route_name: string | null;
+    }>;
+  } = await db
+    .prepare(
+      "SELECT id, name, identifier, json_extract(data, '$.basic.route_id') as route_id, json_extract(data, '$.basic.route_name') as route_name FROM agent_profiles WHERE kind = ? AND (name LIKE ? OR identifier LIKE ? OR id LIKE ? OR json_extract(data, '$.basic.route_id') LIKE ? OR json_extract(data, '$.basic.route_name') LIKE ?) ORDER BY name LIMIT 8"
+    )
+    .bind('route', `%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`)
+    .all();
+
+  const allRoutes: {
+    results: Array<{
+      id: string;
+      name: string;
+      identifier: string | null;
+      route_id: string | null;
+      route_name: string | null;
+    }>;
+  } = await db
+    .prepare(
+      "SELECT id, name, identifier, json_extract(data, '$.basic.route_id') as route_id, json_extract(data, '$.basic.route_name') as route_name FROM agent_profiles WHERE kind = ? ORDER BY name"
+    )
+    .bind('route')
+    .all();
+
+  const rankedCandidates = allRoutes.results
+    .map((item) => ({
+      candidate: buildRouteCandidate(item),
+      score: scoreByTokens(query, [item.name, item.identifier ?? '', item.route_id ?? '', item.route_name ?? '', item.id], 2),
+    }))
+    .filter((item) => item.score >= 120)
+    .sort((left, right) => right.score - left.score)
+    .map((item) => item.candidate);
+
+  const candidates = dedupeCandidates([
+    ...fuzzyMatches.results.map(buildRouteCandidate),
+    ...rankedCandidates,
+  ]).slice(0, 4);
+
+  if (candidates.length > 1) {
+    return { kind: 'clarify', query, reason: 'ambiguous', candidates };
+  }
+
+  if (candidates.length === 1) {
+    return { kind: 'clarify', query, reason: 'single_candidate', candidates };
+  }
+
+  return { kind: 'clarify', query, reason: 'not_found', candidates: [] };
+}
+
+export async function resolveIncidentLookup(
+  db: any,
+  rawQuery: string
+): Promise<IncidentLookupResolution> {
+  const query = cleanExtractedEntityToken(rawQuery);
+  if (isLikelyIncompleteIncidentArg(query)) {
+    return { kind: 'clarify', query, reason: 'too_short', candidates: [] };
+  }
+
+  const exactMatches: {
+    results: Array<{
+      id: string;
+      name: string;
+      identifier: string | null;
+      accident_date: string | null;
+      data: string;
+    }>;
+  } = await db
+    .prepare(
+      "SELECT id, name, identifier, json_extract(data, '$.basic.accident_date') as accident_date, data FROM agent_profiles WHERE kind = ? AND (id = ? OR name = ? OR identifier = ? OR json_extract(data, '$.basic.report_title') = ? OR json_extract(data, '$.basic.accident_date') = ? OR json_extract(data, '$.basic.route_name') = ?) ORDER BY identifier, id"
+    )
+    .bind('incident_case', query, query, query, query, query, query)
+    .all();
+
+  if (exactMatches.results.length === 1) {
+    const exact = exactMatches.results[0];
+    return {
+      kind: 'resolved',
+      query,
+      candidate: buildIncidentCandidate(exact),
+      data: buildIncidentData({
+        ...exact,
+        incident_id: exact.identifier ?? exact.id,
+      }),
+      matchType: 'exact',
+    };
+  }
+
+  if (exactMatches.results.length > 1) {
+    return {
+      kind: 'clarify',
+      query,
+      reason: 'ambiguous',
+      candidates: exactMatches.results.map(buildIncidentCandidate),
+    };
+  }
+
+  const fuzzyMatches: {
+    results: Array<{
+      id: string;
+      name: string;
+      identifier: string | null;
+      accident_date: string | null;
+    }>;
+  } = await db
+    .prepare(
+      "SELECT id, name, identifier, json_extract(data, '$.basic.accident_date') as accident_date FROM agent_profiles WHERE kind = ? AND (name LIKE ? OR identifier LIKE ? OR id LIKE ? OR json_extract(data, '$.basic.report_title') LIKE ? OR json_extract(data, '$.basic.accident_date') LIKE ? OR json_extract(data, '$.basic.route_name') LIKE ?) ORDER BY name LIMIT 8"
+    )
+    .bind('incident_case', `%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`)
+    .all();
+
+  const allIncidents: {
+    results: Array<{
+      id: string;
+      name: string;
+      identifier: string | null;
+      accident_date: string | null;
+    }>;
+  } = await db
+    .prepare(
+      "SELECT id, name, identifier, json_extract(data, '$.basic.accident_date') as accident_date FROM agent_profiles WHERE kind = ? ORDER BY name"
+    )
+    .bind('incident_case')
+    .all();
+
+  const rankedCandidates = allIncidents.results
+    .map((item) => ({
+      candidate: buildIncidentCandidate(item),
+      score: scoreByTokens(query, [item.name, item.identifier ?? '', item.id, item.accident_date ?? ''], 3),
+    }))
+    .filter((item) => item.score >= 120)
+    .sort((left, right) => right.score - left.score)
+    .map((item) => item.candidate);
+
+  const candidates = dedupeCandidates([
+    ...fuzzyMatches.results.map(buildIncidentCandidate),
+    ...rankedCandidates,
+  ]).slice(0, 4);
+
+  if (candidates.length > 1) {
+    return { kind: 'clarify', query, reason: 'ambiguous', candidates };
+  }
+
+  if (candidates.length === 1) {
+    return { kind: 'clarify', query, reason: 'single_candidate', candidates };
+  }
+
+  return { kind: 'clarify', query, reason: 'not_found', candidates: [] };
+}
+
+function formatDriverLookupCandidate(candidate: DriverLookupCandidate): string {
+  const identifier = candidate.identifier?.trim() || candidate.id;
+  return `${candidate.name}（工号 ${identifier}）`;
+}
+
+function formatVehicleLookupCandidate(candidate: VehicleLookupCandidate): string {
+  const plateNumber = candidate.identifier?.trim() || candidate.name;
+  const vehicleId = candidate.vehicle_id?.trim() || candidate.id;
+  return `${plateNumber}（车辆ID ${vehicleId}）`;
+}
+
+function formatRouteLookupCandidate(candidate: RouteLookupCandidate): string {
+  const routeName = candidate.route_name?.trim() || candidate.name;
+  const routeId = candidate.route_id?.trim() || candidate.identifier?.trim() || candidate.id;
+  return `${routeName}（线路ID ${routeId}）`;
+}
+
+function formatIncidentLookupCandidate(candidate: IncidentLookupCandidate): string {
+  const incidentId = candidate.incident_id?.trim() || candidate.identifier?.trim() || candidate.id;
+  const dateText = candidate.accident_date?.trim() ? `，日期 ${candidate.accident_date.trim()}` : '';
+  return `${candidate.name}（标识 ${incidentId}${dateText}）`;
+}
+
+function buildTooShortReply(
+  label: string,
+  examples: string[],
+  actionExample: string
+): string {
+  return [
+    `要生成${label}，需要先确认具体对象；当前提供的信息还不够。`,
+    '可以直接回复更完整的标识，例如：',
+    ...examples.map((item, index) => `${index + 1}. ${item}`),
+    `也可以直接说：${actionExample}`,
+  ].join('\n');
+}
+
+function buildAmbiguousReply(label: string, query: string, candidates: string[]): string {
+  return [
+    `我找到了多个可能匹配 ${query ? `“${query}”` : '该输入'} 的${label}，请确认具体对象：`,
+    ...candidates.map((item, index) => `${index + 1}. ${item}`),
+    '可以直接回复序号，或直接回复完整名称/编号。',
+  ].join('\n');
+}
+
+function buildSingleCandidateReply(label: string, query: string, candidate: string): string {
+  return [
+    `我只找到一个较可能匹配 ${query ? `“${query}”` : '该输入'} 的${label}：`,
+    `1. ${candidate}`,
+    '如果就是它，直接回复“是”或回复完整名称/编号即可。',
+  ].join('\n');
+}
+
+function buildNotFoundReply(label: string, query: string, hint: string): string {
+  return [
+    `没有找到与 ${query ? `“${query}”` : '当前输入'} 对应的${label}。`,
+    hint,
+  ].join('\n');
+}
+
+export function buildDriverLookupReply(resolution: DriverLookupResolution): string {
+  if (resolution.kind === 'resolved') return '';
+  if (resolution.reason === 'too_short') {
+    return buildTooShortReply('驾驶员报告', ['驾驶员姓名：张三', '工号：203019'], '生成驾驶员报告，驾驶员：张三');
+  }
+  if (resolution.reason === 'same_name' || resolution.reason === 'ambiguous') {
+    return buildAmbiguousReply(
+      '驾驶员',
+      resolution.query,
+      resolution.candidates.map(formatDriverLookupCandidate)
+    );
+  }
+  if (resolution.reason === 'single_candidate') {
+    return buildSingleCandidateReply(
+      '驾驶员',
+      resolution.query,
+      formatDriverLookupCandidate(resolution.candidates[0])
+    );
+  }
+  return buildNotFoundReply(
+    '驾驶员',
+    resolution.query,
+    '请提供更准确的姓名或工号，例如“张三”或“203019”。'
+  );
+}
+
+export function buildVehicleLookupReply(resolution: VehicleLookupResolution): string {
+  if (resolution.kind === 'resolved') return '';
+  if (resolution.reason === 'too_short') {
+    return buildTooShortReply(
+      '车辆报告',
+      ['车牌号：沪A12345', '车辆ID：US-102', 'profile ID：vehicle-001'],
+      '生成车辆报告，车辆：沪A12345'
+    );
+  }
+  if (resolution.reason === 'ambiguous') {
+    return buildAmbiguousReply(
+      '车辆',
+      resolution.query,
+      resolution.candidates.map(formatVehicleLookupCandidate)
+    );
+  }
+  if (resolution.reason === 'single_candidate') {
+    return buildSingleCandidateReply(
+      '车辆',
+      resolution.query,
+      formatVehicleLookupCandidate(resolution.candidates[0])
+    );
+  }
+  return buildNotFoundReply(
+    '车辆',
+    resolution.query,
+    '请提供更准确的车牌号、车辆ID 或 profile ID。'
+  );
+}
+
+export function buildRouteLookupReply(resolution: RouteLookupResolution): string {
+  if (resolution.kind === 'resolved') return '';
+  if (resolution.reason === 'too_short') {
+    return buildTooShortReply(
+      '线路报告',
+      ['线路名称：K1', '线路编号：route-001'],
+      '生成线路报告，线路：K1'
+    );
+  }
+  if (resolution.reason === 'ambiguous') {
+    return buildAmbiguousReply(
+      '线路',
+      resolution.query,
+      resolution.candidates.map(formatRouteLookupCandidate)
+    );
+  }
+  if (resolution.reason === 'single_candidate') {
+    return buildSingleCandidateReply(
+      '线路',
+      resolution.query,
+      formatRouteLookupCandidate(resolution.candidates[0])
+    );
+  }
+  return buildNotFoundReply(
+    '线路',
+    resolution.query,
+    '请提供更准确的线路名称或线路编号。'
+  );
+}
+
+export function buildIncidentLookupReply(resolution: IncidentLookupResolution): string {
+  if (resolution.kind === 'resolved') return '';
+  if (resolution.reason === 'too_short') {
+    return buildTooShortReply(
+      '事故调查报告',
+      ['事故编号：INC-202603-01', '事故标题：3月10日追尾事故', '事故日期：2026-03-10'],
+      '生成事故调查报告，事故：INC-202603-01'
+    );
+  }
+  if (resolution.reason === 'ambiguous') {
+    return buildAmbiguousReply(
+      '事故',
+      resolution.query,
+      resolution.candidates.map(formatIncidentLookupCandidate)
+    );
+  }
+  if (resolution.reason === 'single_candidate') {
+    return buildSingleCandidateReply(
+      '事故',
+      resolution.query,
+      formatIncidentLookupCandidate(resolution.candidates[0])
+    );
+  }
+  return buildNotFoundReply(
+    '事故',
+    resolution.query,
+    '请提供更准确的事故编号、事故标题或事故日期。'
+  );
+}
+
+export function buildDriverMissingInfoReply(): string {
+  return buildTooShortReply(
+    '驾驶员报告',
+    ['驾驶员姓名：张三', '工号：203019'],
+    '生成驾驶员报告，驾驶员：张三'
+  );
+}
+
+export function buildVehicleMissingInfoReply(): string {
+  return buildTooShortReply(
+    '车辆报告',
+    ['车牌号：沪A12345', '车辆ID：US-102', 'profile ID：vehicle-001'],
+    '生成车辆报告，车辆：沪A12345'
+  );
+}
+
+export function buildRouteMissingInfoReply(): string {
+  return buildTooShortReply(
+    '线路报告',
+    ['线路名称：K1', '线路编号：route-001'],
+    '生成线路报告，线路：K1'
+  );
+}
+
+export function buildAccidentMissingInfoReply(): string {
+  return buildTooShortReply(
+    '事故调查报告',
+    ['事故编号：INC-202603-01', '事故标题：3月10日追尾事故', '事故日期：2026-03-10'],
+    '生成事故调查报告，事故：INC-202603-01'
+  );
+}
+
+function getDriverLookupKey(resolution: DriverLookupResolution & { kind: 'resolved' }): string {
+  return resolution.candidate.identifier?.trim() || resolution.candidate.id || resolution.candidate.name;
+}
+
+function getVehicleLookupKey(resolution: VehicleLookupResolution & { kind: 'resolved' }): string {
+  return (
+    readFirstStringAtPaths(resolution.data, ['basic.vehicle_id']) ??
+    resolution.candidate.vehicle_id?.trim() ??
+    resolution.candidate.identifier?.trim() ??
+    resolution.candidate.id ??
+    resolution.candidate.name
+  );
+}
+
+function getRouteLookupKey(resolution: RouteLookupResolution & { kind: 'resolved' }): string {
+  return (
+    resolution.candidate.identifier?.trim() ||
+    resolution.candidate.id ||
+    resolution.candidate.route_id?.trim() ||
+    resolution.candidate.route_name?.trim() ||
+    resolution.candidate.name
+  );
+}
+
+function getIncidentLookupKey(resolution: IncidentLookupResolution & { kind: 'resolved' }): string {
+  return (
+    resolution.candidate.identifier?.trim() ||
+    resolution.candidate.id ||
+    resolution.candidate.incident_id?.trim() ||
+    resolution.candidate.name
+  );
+}
+
+export function buildDriverLookupWorkerPrompt(
+  resolution: DriverLookupResolution & { kind: 'resolved' }
+): string {
+  const driverName = resolution.candidate.name;
+  const lookupKey = getDriverLookupKey(resolution);
+  return [
+    `请生成驾驶员「${driverName}」的安全报告。`,
+    `已确认目标驾驶员：姓名「${driverName}」，工号「${lookupKey}」。`,
+    '你可以使用 query_data 工具查询数据：',
+    '1. 先用 query_data(action: "describe", entity_type: "driver") 了解数据结构',
+    `2. 优先用 query_data(action: "get", entity_type: "driver", entity_id: "${lookupKey}") 获取该驾驶员详细数据`,
+    `3. 若工号未命中，再用姓名 "${driverName}" 重试 get`,
+    '4. 严格按技能模板输出 JSON，尤其是“二、核心风险研判”要逐条写明排序与关键指标',
+    '5. 如果缺少直接次数指标，也要基于现有数据继续分析，不要省略',
+  ].join('\n');
+}
+
+export function buildVehicleLookupWorkerPrompt(
+  resolution: VehicleLookupResolution & { kind: 'resolved' }
+): string {
+  const plateNumber =
+    String(
+      readFirstStringAtPaths(resolution.data, ['basic.plate_number']) ??
+        resolution.candidate.identifier ??
+        resolution.candidate.name
+    ).trim() || resolution.candidate.name;
+  const vehicleId = getVehicleLookupKey(resolution);
+
+  return [
+    `请生成车辆「${plateNumber}」的安全报告。`,
+    `已确认目标车辆：车牌号「${plateNumber}」，车辆ID「${vehicleId}」。`,
+    '你可以使用 query_data 工具查询数据：',
+    '1. 先用 query_data(action: "describe", entity_type: "vehicle") 了解数据结构',
+    `2. 优先用 query_data(action: "get", entity_type: "vehicle", entity_id: "${vehicleId}") 获取该车辆详细数据`,
+    `3. 若车辆ID未命中，再用车牌号 "${plateNumber}" 重试 get`,
+    '4. 严格按技能模板输出 JSON，最终一级指标只能是“综合风险 / 故障风险 / 能耗风险”',
+    '5. 只能基于已确认车辆的数据生成报告，不要虚构告警次数',
+  ].join('\n');
+}
+
+export function buildRouteLookupWorkerPrompt(
+  resolution: RouteLookupResolution & { kind: 'resolved' }
+): string {
+  const routeName =
+    String(
+      readFirstStringAtPaths(resolution.data, ['basic.route_name', 'route_name']) ??
+        resolution.candidate.route_name ??
+        resolution.candidate.name
+    ).trim() || resolution.candidate.name;
+  const routeId =
+    String(
+      readFirstStringAtPaths(resolution.data, ['basic.route_id', 'route_id']) ??
+        resolution.candidate.route_id ??
+        resolution.candidate.identifier ??
+        resolution.candidate.id
+    ).trim() || resolution.candidate.id;
+  const lookupKey = getRouteLookupKey(resolution);
+
+  return [
+    `请生成线路「${routeName}」的安全风险分析总结报告（管理人员版）。`,
+    `已确认目标线路：线路名称「${routeName}」，线路ID「${routeId}」，查询标识「${lookupKey}」。`,
+    '你可以使用 query_data 工具查询数据：',
+    '1. 先用 query_data(action: "describe", entity_type: "route") 了解数据结构',
+    `2. 优先用 query_data(action: "get", entity_type: "route", entity_id: "${lookupKey}") 获取该线路详细数据`,
+    `3. 若查询标识未命中，再用线路名称 "${routeName}" 重试 get`,
+    '4. 仅输出管理版 JSON，必须包含 layout、management_summary、dashboard_rows、core_risk_assessment、behavior_data_analysis、interventions、appendix',
+    '5. “二、核心风险研判”需要逐条写明排序与关键指标，不要把其他线路的数据混入结果',
+  ].join('\n');
+}
+
+export function buildIncidentLookupWorkerPrompt(
+  resolution: IncidentLookupResolution & { kind: 'resolved' }
+): string {
+  const incidentTitle =
+    String(
+      readFirstStringAtPaths(resolution.data, ['basic.report_title']) ?? resolution.candidate.name
+    ).trim() || resolution.candidate.name;
+  const accidentDate =
+    String(
+      readFirstStringAtPaths(resolution.data, ['basic.accident_date']) ??
+        resolution.candidate.accident_date ??
+        ''
+    ).trim();
+  const routeName =
+    String(readFirstStringAtPaths(resolution.data, ['basic.route_name']) ?? '').trim();
+  const lookupKey = getIncidentLookupKey(resolution);
+
+  return [
+    '请生成事故调查情况和整改措施报告。',
+    `已确认目标事故：标题「${incidentTitle}」，标识「${lookupKey}」${accidentDate ? `，事故日期「${accidentDate}」` : ''}${routeName ? `，事发线路「${routeName}」` : ''}。`,
+    '你可以使用 query_data 工具查询数据：',
+    '1. 先用 query_data(action: "describe", entity_type: "incident_case") 了解数据结构',
+    `2. 再用 query_data(action: "get", entity_type: "incident_case", entity_id: "${lookupKey}") 获取详细数据`,
+    '3. 按“四大章节”输出结构化结果，并确保每条结论都有证据支撑',
+  ].join('\n');
+}
+
+function parseDriverCandidates(value: unknown): DriverLookupCandidate[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((item) => ({
+      id: String(item.id ?? '').trim(),
+      name: String(item.name ?? '').trim(),
+      identifier: item.identifier == null ? null : String(item.identifier).trim(),
+    }))
+    .filter((item) => item.id && item.name);
+}
+
+function parseVehicleCandidates(value: unknown): VehicleLookupCandidate[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((item) => ({
+      id: String(item.id ?? '').trim(),
+      name: String(item.name ?? '').trim(),
+      identifier: item.identifier == null ? null : String(item.identifier).trim(),
+      vehicle_id: item.vehicle_id == null ? null : String(item.vehicle_id).trim(),
+    }))
+    .filter((item) => item.id && item.name);
+}
+
+function parseRouteCandidates(value: unknown): RouteLookupCandidate[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((item) => ({
+      id: String(item.id ?? '').trim(),
+      name: String(item.name ?? '').trim(),
+      identifier: item.identifier == null ? null : String(item.identifier).trim(),
+      route_id: item.route_id == null ? null : String(item.route_id).trim(),
+      route_name: item.route_name == null ? null : String(item.route_name).trim(),
+    }))
+    .filter((item) => item.id && item.name);
+}
+
+function parseIncidentCandidates(value: unknown): IncidentLookupCandidate[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((item) => ({
+      id: String(item.id ?? '').trim(),
+      name: String(item.name ?? '').trim(),
+      identifier: item.identifier == null ? null : String(item.identifier).trim(),
+      incident_id: item.incident_id == null ? null : String(item.incident_id).trim(),
+      accident_date: item.accident_date == null ? null : String(item.accident_date).trim(),
+    }))
+    .filter((item) => item.id && item.name);
+}
+
+function parsePendingStructuredLookupState(value: unknown): PendingStructuredLookupState | null {
+  if (!isRecord(value)) return null;
+  const kind = value.kind;
+  const query = typeof value.query === 'string' ? value.query.trim() : '';
+
+  if (kind === 'driver_report_lookup') {
+    const reason = typeof value.reason === 'string' ? value.reason.trim() : '';
+    if (
+      reason !== 'missing_name' &&
+      reason !== 'too_short' &&
+      reason !== 'ambiguous' &&
+      reason !== 'same_name' &&
+      reason !== 'single_candidate' &&
+      reason !== 'not_found'
+    ) {
+      return null;
+    }
+    return { kind, reason, query, candidates: parseDriverCandidates(value.candidates) };
+  }
+
+  if (kind === 'vehicle_report_lookup') {
+    const reason = typeof value.reason === 'string' ? value.reason.trim() : '';
+    if (
+      reason !== 'missing_vehicle' &&
+      reason !== 'too_short' &&
+      reason !== 'ambiguous' &&
+      reason !== 'single_candidate' &&
+      reason !== 'not_found'
+    ) {
+      return null;
+    }
+    return { kind, reason, query, candidates: parseVehicleCandidates(value.candidates) };
+  }
+
+  if (kind === 'route_report_lookup') {
+    const reason = typeof value.reason === 'string' ? value.reason.trim() : '';
+    if (
+      reason !== 'missing_route' &&
+      reason !== 'too_short' &&
+      reason !== 'ambiguous' &&
+      reason !== 'single_candidate' &&
+      reason !== 'not_found'
+    ) {
+      return null;
+    }
+    return { kind, reason, query, candidates: parseRouteCandidates(value.candidates) };
+  }
+
+  if (kind === 'incident_report_lookup') {
+    const reason = typeof value.reason === 'string' ? value.reason.trim() : '';
+    if (
+      reason !== 'missing_incident' &&
+      reason !== 'too_short' &&
+      reason !== 'ambiguous' &&
+      reason !== 'single_candidate' &&
+      reason !== 'not_found'
+    ) {
+      return null;
+    }
+    return { kind, reason, query, candidates: parseIncidentCandidates(value.candidates) };
+  }
+
+  return null;
+}
+
+async function getPendingStructuredLookupState(
+  db: any,
+  sessionId: string
+): Promise<PendingStructuredLookupState | null> {
+  const row: { metadata: string | null } | null = await db
+    .prepare(
+      'SELECT metadata FROM agent_messages WHERE session_id = ? AND role = ? ORDER BY created_at DESC LIMIT 1'
+    )
+    .bind(sessionId, 'assistant')
+    .first();
+  if (!row?.metadata) return null;
+  const parsed = safeJsonParse(row.metadata);
+  if (!isRecord(parsed)) return null;
+  return parsePendingStructuredLookupState(parsed.pending_structured_lookup);
+}
+
+function getCandidateLookupTokens(candidate: PendingStructuredLookupState['candidates'][number]): string[] {
+  const common = [
+    String(candidate.id ?? ''),
+    String(candidate.name ?? ''),
+    String((candidate as { identifier?: string | null }).identifier ?? ''),
+  ];
+
+  if ('vehicle_id' in candidate) {
+    const vehicleCandidate = candidate as VehicleLookupCandidate;
+    common.push(String(vehicleCandidate.vehicle_id ?? ''));
+  }
+  if ('route_id' in candidate) {
+    const routeCandidate = candidate as RouteLookupCandidate;
+    common.push(String(routeCandidate.route_id ?? ''), String(routeCandidate.route_name ?? ''));
+  }
+  if ('incident_id' in candidate) {
+    const incidentCandidate = candidate as IncidentLookupCandidate;
+    common.push(
+      String(incidentCandidate.incident_id ?? ''),
+      String(incidentCandidate.accident_date ?? '')
+    );
+  }
+  return common.filter((item) => item.trim().length > 0);
+}
+
+function findCandidateByReply(
+  state: PendingStructuredLookupState,
+  userContent: string
+): PendingStructuredLookupState['candidates'][number] | null {
+  const trimmed = userContent.trim();
+  const normalized = normalizeArgToken(trimmed);
+  if (!normalized) return null;
+
+  const indexMatch = normalized.match(/^(?:第)?([1234一二三四])(?:个|條|条|位|辆|台|线路|起|项)?$/);
+  if (indexMatch) {
+    const indexMap: Record<string, number> = {
+      '1': 0,
+      '2': 1,
+      '3': 2,
+      '4': 3,
+      一: 0,
+      二: 1,
+      三: 2,
+      四: 3,
+    };
+    const index = indexMap[indexMatch[1]];
+    if (index != null) {
+      return state.candidates[index] ?? null;
+    }
+  }
+
+  const direct = state.candidates.find((candidate) =>
+    getCandidateLookupTokens(candidate).some((token) => normalizeArgToken(token) === normalized)
+  );
+  if (direct) return direct;
+
+  const embedded = state.candidates.find((candidate) =>
+    getCandidateLookupTokens(candidate).some((token) => {
+      const normalizedToken = normalizeArgToken(token);
+      return normalized.includes(normalizedToken) || normalizedToken.includes(normalized);
+    })
+  );
+  if (embedded) return embedded;
+
+  if (state.candidates.length === 1 && AFFIRMATIVE_TOKENS.has(normalized)) {
+    return state.candidates[0];
+  }
+
+  return null;
+}
+
+function resolvePendingToolCallFromState(
+  state: PendingStructuredLookupState,
+  candidateOrRawValue: string
+): WorkerToolCall {
+  if (state.kind === 'driver_report_lookup') {
+    return {
+      tool: 'generate_driver_report',
+      args: { driver_name: candidateOrRawValue },
+    };
+  }
+  if (state.kind === 'vehicle_report_lookup') {
+    return {
+      tool: 'generate_vehicle_report',
+      args: { vehicle_id: candidateOrRawValue },
+    };
+  }
+  if (state.kind === 'route_report_lookup') {
+    return {
+      tool: 'generate_route_report',
+      args: { route_name: candidateOrRawValue },
+    };
+  }
+  return {
+    tool: 'generate_accident_investigation_report',
+    args: { incident_id: candidateOrRawValue },
+  };
+}
+
+function getPendingRawValueFromCandidate(
+  state: PendingStructuredLookupState,
+  candidate: PendingStructuredLookupState['candidates'][number]
+): string {
+  if (state.kind === 'driver_report_lookup') {
+    return String((candidate as DriverLookupCandidate).identifier ?? candidate.name);
+  }
+  if (state.kind === 'vehicle_report_lookup') {
+    const vehicle = candidate as VehicleLookupCandidate;
+    return String(vehicle.vehicle_id ?? vehicle.identifier ?? vehicle.name);
+  }
+  if (state.kind === 'route_report_lookup') {
+    const route = candidate as RouteLookupCandidate;
+    return String(route.route_id ?? route.identifier ?? route.route_name ?? route.name);
+  }
+  const incident = candidate as IncidentLookupCandidate;
+  return String(incident.incident_id ?? incident.identifier ?? incident.id);
+}
+
+function isFreshStructuredLookupRequest(content: string): boolean {
+  return (
+    looksLikeDriverReportRequest(content) ||
+    looksLikeVehicleReportRequest(content) ||
+    looksLikeRouteReportRequest(content) ||
+    looksLikeAccidentInvestigationReportRequest(content) ||
+    content.startsWith(INTERNAL_STRUCTURED_TOOL_PREFIX)
+  );
+}
+
+export async function rewritePendingStructuredLookupFollowUp(
+  db: any,
+  sessionId: string,
+  userContent: string
+): Promise<string | null> {
+  const state = await getPendingStructuredLookupState(db, sessionId);
+  if (!state) return null;
+
+  const trimmed = userContent.trim();
+  if (!trimmed) return null;
+  if (isFreshStructuredLookupRequest(trimmed)) return null;
+
+  const matchedCandidate = findCandidateByReply(state, trimmed);
+  if (matchedCandidate) {
+    return encodeInternalStructuredToolCall(
+      resolvePendingToolCallFromState(state, getPendingRawValueFromCandidate(state, matchedCandidate))
+    );
+  }
+
+  const cleaned = cleanExtractedEntityToken(
+    trimmed.replace(/^(就是|确认|确认是|我选|选择|选|用|看)\s*/u, '')
+  );
+
+  if (state.kind === 'driver_report_lookup') {
+    if (
+      cleaned &&
+      !isInvalidDriverNameArg(cleaned) &&
+      (state.reason === 'missing_name' || state.reason === 'too_short')
+    ) {
+      return encodeInternalStructuredToolCall(resolvePendingToolCallFromState(state, cleaned));
+    }
+    return null;
+  }
+
+  if (state.kind === 'vehicle_report_lookup') {
+    if (
+      cleaned &&
+      !isInvalidVehicleIdArg(cleaned) &&
+      (state.reason === 'missing_vehicle' || state.reason === 'too_short')
+    ) {
+      return encodeInternalStructuredToolCall(resolvePendingToolCallFromState(state, cleaned));
+    }
+    return null;
+  }
+
+  if (state.kind === 'route_report_lookup') {
+    if (
+      cleaned &&
+      !isInvalidRouteNameArg(cleaned) &&
+      (state.reason === 'missing_route' || state.reason === 'too_short')
+    ) {
+      return encodeInternalStructuredToolCall(resolvePendingToolCallFromState(state, cleaned));
+    }
+    return null;
+  }
+
+  if (
+    cleaned &&
+    !isInvalidIncidentArg(cleaned) &&
+    (state.reason === 'missing_incident' || state.reason === 'too_short')
+  ) {
+    return encodeInternalStructuredToolCall(resolvePendingToolCallFromState(state, cleaned));
+  }
+
+  return null;
+}
+
+export function buildPendingStructuredLookupState(
+  tool: StructuredLookupToolName,
+  resolution:
+    | DriverLookupResolution
+    | VehicleLookupResolution
+    | RouteLookupResolution
+    | IncidentLookupResolution
+): PendingStructuredLookupState | null {
+  if (resolution.kind === 'resolved') return null;
+  if (tool === 'generate_driver_report') {
+    return {
+      kind: 'driver_report_lookup',
+      reason: resolution.reason,
+      query: resolution.query,
+      candidates: resolution.candidates as DriverLookupCandidate[],
+    };
+  }
+  if (tool === 'generate_vehicle_report') {
+    return {
+      kind: 'vehicle_report_lookup',
+      reason: resolution.reason as PendingVehicleLookupState['reason'],
+      query: resolution.query,
+      candidates: resolution.candidates as VehicleLookupCandidate[],
+    };
+  }
+  if (tool === 'generate_route_report') {
+    return {
+      kind: 'route_report_lookup',
+      reason: resolution.reason as PendingRouteLookupState['reason'],
+      query: resolution.query,
+      candidates: resolution.candidates as RouteLookupCandidate[],
+    };
+  }
+  return {
+    kind: 'incident_report_lookup',
+    reason: resolution.reason as PendingIncidentLookupState['reason'],
+    query: resolution.query,
+    candidates: resolution.candidates as IncidentLookupCandidate[],
+  };
+}
+
+export function buildMissingStructuredLookupState(
+  tool: StructuredLookupToolName
+): PendingStructuredLookupState {
+  if (tool === 'generate_driver_report') {
+    return { kind: 'driver_report_lookup', reason: 'missing_name', query: '', candidates: [] };
+  }
+  if (tool === 'generate_vehicle_report') {
+    return { kind: 'vehicle_report_lookup', reason: 'missing_vehicle', query: '', candidates: [] };
+  }
+  if (tool === 'generate_route_report') {
+    return { kind: 'route_report_lookup', reason: 'missing_route', query: '', candidates: [] };
+  }
+  return {
+    kind: 'incident_report_lookup',
+    reason: 'missing_incident',
+    query: '',
+    candidates: [],
+  };
+}
+
+export function extractStructuredLookupDisplayName(
+  tool: StructuredLookupToolName,
+  resolution:
+    | DriverLookupResolution
+    | VehicleLookupResolution
+    | RouteLookupResolution
+    | IncidentLookupResolution
+): string {
+  if (resolution.kind !== 'resolved') {
+    return '';
+  }
+
+  if (tool === 'generate_driver_report') {
+    return resolution.candidate.name;
+  }
+  if (tool === 'generate_vehicle_report') {
+    return (
+      readFirstStringAtPaths(resolution.data, ['basic.plate_number']) ??
+      resolution.candidate.identifier ??
+      resolution.candidate.name
+    );
+  }
+  if (tool === 'generate_route_report') {
+    const routeCandidate = resolution.candidate as RouteLookupCandidate;
+    return (
+      readFirstStringAtPaths(resolution.data, ['basic.route_name', 'route_name']) ??
+      routeCandidate.route_name ??
+      routeCandidate.name
+    );
+  }
+  return (
+    readFirstStringAtPaths(resolution.data, ['basic.report_title']) ??
+    resolution.candidate.name
+  );
+}
+
+export function getStructuredLookupSummary(
+  tool: StructuredLookupToolName,
+  resolution:
+    | DriverLookupResolution
+    | VehicleLookupResolution
+    | RouteLookupResolution
+    | IncidentLookupResolution
+): Record<string, unknown> {
+  if (resolution.kind === 'resolved') {
+    return {
+      kind: resolution.kind,
+      query: resolution.query,
+      match_type: resolution.matchType,
+      candidate: resolution.candidate,
+      label: extractStructuredLookupDisplayName(tool, resolution),
+    };
+  }
+
+  return {
+    kind: resolution.kind,
+    query: resolution.query,
+    reason: resolution.reason,
+    candidates: resolution.candidates,
+  };
+}
+
+export function readStringValueAtPaths(
+  source: Record<string, unknown>,
+  paths: string[]
+): string | null {
+  for (const path of paths) {
+    const value = getNestedValue(source, path);
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}

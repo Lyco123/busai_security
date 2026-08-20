@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+.wrangler/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+.dev.vars
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+test-results/
+
+# Temporary files
+/tmp/
+
+# TypeScript
+*.tsbuildinfo
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# LaTeX intermediate files
+*.aux
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.xdv
+*.toc
+*.out
+
+# retrieval 子项目
+retrieval/node_modules/
+retrieval/*.tgz

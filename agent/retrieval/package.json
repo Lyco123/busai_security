@@ -1,0 +1,33 @@
+{
+  "name": "bus-kb-retrieval",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vector knowledge base retrieval service with field-level authorization",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "dev:worker": "tsx watch src/worker.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "start:worker": "node dist/worker.js",
+    "init:schema": "tsx src/init-schema.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@clickhouse/client": "^1.12.1",
+    "@fastify/multipart": "^8.3.1",
+    "@qdrant/js-client-rest": "^1.14.1",
+    "dotenv": "^16.6.1",
+    "fastify": "^4.28.1",
+    "mammoth": "^1.9.1",
+    "pdf-parse": "^1.1.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "@types/pdf-parse": "^1.1.5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

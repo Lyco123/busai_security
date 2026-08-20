@@ -1,0 +1,172 @@
+[
+  {
+    "id": "R+1-vehicle-summary-management",
+    "category": "should_recall",
+    "title": "车辆报告近义：总结/管理视角",
+    "turns": [
+      {
+        "prompt": "粤A02650D 这台车我要一份安全风险分析总结，管理口看的，画像日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["粤A02650D", "安全", "风险"],
+          "must_not_contain_any": []
+        }
+      }
+    ]
+  },
+  {
+    "id": "R+2-vehicle-colloquial",
+    "category": "should_recall",
+    "title": "车辆报告口语化、省略生成",
+    "turns": [
+      {
+        "prompt": "帮我整一下 粤A02013D 那车的安全方面材料，就 20251221 那天档期的。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["粤A02013D", "安全"],
+          "must_not_contain_any": []
+        }
+      }
+    ]
+  },
+  {
+    "id": "R+3-vehicle-irregular-format",
+    "category": "should_recall",
+    "title": "车辆报告不规范：空格/口语日期",
+    "turns": [
+      {
+        "prompt": "车牌 粤A 02650D（中间有空格），要看车辆安全总结报告，时间：2025年12月21号 的画像。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report", "consult_omni"],
+          "must_not_contain_any": []
+        }
+      }
+    ]
+  },
+  {
+    "id": "R+4-vehicle-clarify-then-complete",
+    "category": "should_recall",
+    "title": "车辆报告多轮澄清后补全",
+    "turns": [
+      {
+        "prompt": "我想看车辆管理人员版那种安全总结，你帮我把版式出全。",
+        "timeout_ms": 180000,
+        "expect": {
+          "ask_for_more_info": true,
+          "must_not_contain_any": []
+        }
+      },
+      {
+        "prompt": "车是 粤A02013D，分区 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["粤A02013D"],
+          "must_not_contain_any": []
+        }
+      }
+    ]
+  },
+  {
+    "id": "R+5-vehicle-bilingual",
+    "category": "should_recall",
+    "title": "车辆报告中英混排",
+    "turns": [
+      {
+        "prompt": "Please give me the vehicle safety summary (management) for plate 粤A02650D, ppartition=20251221.",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_vehicle_report"],
+          "must_contain_any": ["粤A02650D"],
+          "must_not_contain_any": []
+        }
+      }
+    ]
+  },
+  {
+    "id": "R-1-driver-confusion",
+    "category": "should_not_recall",
+    "title": "车辆报告不应召回：驾驶员报告易混",
+    "turns": [
+      {
+        "prompt": "我要 驾驶员安全风险分析报告，司机那侧的，名字 任宇邦，日期 20251221。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_in": ["generate_driver_report", "consult_omni"],
+          "must_not_contain_any": ["车辆安全风险分析总结报告"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R-2-no-report-only-archive",
+    "category": "should_not_recall",
+    "title": "车辆报告不应召回：不要报告+档案",
+    "turns": [
+      {
+        "prompt": "别出正式报告，我就问下 粤A02013D 在 20251221 的车型、车队这些基础档案。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_not_in": ["generate_vehicle_report"],
+          "must_contain_any": ["粤A02013D", "车型", "车队"],
+          "must_not_contain_any": ["车辆安全风险分析总结报告", "vehicle_safety_summary_management"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R-3-only-check-existence",
+    "category": "should_not_recall",
+    "title": "车辆报告不应召回：仅确认数据存在",
+    "turns": [
+      {
+        "prompt": "不要生成报告。请确认 粤A02650D 在 20251221 分区有没有车辆画像数据就行。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_not_in": ["generate_vehicle_report"],
+          "must_contain_any": ["粤A02650D"],
+          "must_not_contain_any": ["车辆安全风险分析总结报告", "vehicle_safety_summary_management"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R-4-two-vehicle-comparison",
+    "category": "should_not_recall",
+    "title": "车辆报告不应召回：两车对比",
+    "turns": [
+      {
+        "prompt": "对比 粤A02650D 和 粤A02013D 在 20251221 的基本情况，不要只给一辆车的长篇正式报告。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_not_in": ["generate_vehicle_report"],
+          "must_not_contain_any": ["车辆安全风险分析总结报告", "vehicle_safety_summary_management"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "R-5-no-vehicle-vague-question",
+    "category": "should_not_recall",
+    "title": "车辆报告不应召回：无车牌泛问",
+    "turns": [
+      {
+        "prompt": "公交车安全管理一般要注意啥？先不说具体车牌。",
+        "timeout_ms": 180000,
+        "expect": {
+          "tool_not_in": ["generate_vehicle_report"],
+          "must_contain_any": ["公交", "安全"],
+          "must_not_contain_any": [
+            "粤A02650D",
+            "粤A02013D",
+            "车辆安全风险分析总结报告",
+            "vehicle_safety_summary_management"
+          ]
+        }
+      }
+    ]
+  }
+]

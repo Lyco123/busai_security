@@ -1,0 +1,113 @@
+\documentclass[UTF8]{ctexart}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\title{Agent开发周报 260527}
+\author{刘德辰}
+\date{2026年5月27日}
+
+\begin{document}
+
+\maketitle
+
+\section{模型服务兼容与 Qwen reasoning 流}
+
+\textbf{背景}：测试/本地模型网关不一定需要 \texttt{OPENAI\_API\_KEY}，但原链路会在本地提前拦截；Qwen reasoning 模型的流式响应会返回 \texttt{reasoning} / \texttt{reasoning\_content}，需要兼容解析，同时避免 reasoning 配置影响工具调用稳定性。
+
+\textbf{本周}：把模型调用、embedding、规则/场景匹配等链路的 \texttt{OPENAI\_API\_KEY} 改为可选；请求头仅在 key 存在时附加 \texttt{Authorization}，使无鉴权网关和内网兼容 OpenAI 接口可直接接入。新增 \texttt{enable\_thinking} / \texttt{chat\_template\_kwargs.enable\_thinking} 适配，并在 SSE 解析中捕获 reasoning delta；专家 worker 是否启用 thinking 改由 \texttt{OPENAI\_EXPERT\_THINKING\_ENABLED} 控制，默认不强开，减少与 function/tool calling 的兼容风险。
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{35df8f8}、\texttt{e5afe60}、\texttt{4f1d170}（2026-05-22～27）
+\end{itemize}
+
+\section{流式 probe 与 command/function router 对比}
+
+\textbf{背景}：上周已看到 command router 在 probe 中有明显耗时收益，但还缺少可复现、可对照的前端比较视图；直接并发比较也会受上游并发波动影响，难判断单次差异。
+
+\textbf{本周}：\texttt{pipeline-stream-probe} 增加 \texttt{routerMode} 参数，支持 command router 与原 function-calling router 显式切换；前端研究页新增 Compare routers 模式，按 command $\rightarrow$ function 的顺序执行，并记录各自 first byte、first event、first text、elapsed、事件序列和输出内容。补充 Markdown 快照复制，便于把 probe 结果沉淀到文档；布局改成全宽，避免长事件/长输出挤压。
+
+\textbf{要点}：
+\begin{itemize}
+\item Compare 模式不再只看单条链路，而是同一 prompt 下顺序跑两条 router 路径。
+\item probe 事件继续覆盖 opening、router、worker、tool、final 等阶段，便于定位慢点。
+\item 前端增加会话 ID 搜索过滤，方便按测试 session 回查结果。
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{a4cac4a}、\texttt{ac965dd}、\texttt{b4d74a1}、\texttt{0a7684f}、\texttt{82e761f}、\texttt{13f6847}（2026-05-23～27）
+\end{itemize}
+
+\section{PoingCode 工单处理}
+
+\textbf{背景}：本周修复主要来自 PoingCode 工单，集中在专家问答中途失败、风险分解释错误、报告数据缺项和报告时间口径不一致等问题。
+
+\textbf{本周}：处理专家问答工具轮次耗尽后直接报错的问题，改为基于已查到的数据给出回答，数据不足时明确说明缺少哪些字段；补充风险分解释约束，避免把风险分当成“越高越好”的安全分。驾驶员报告接入同比、环比、同单位、同线路等趋势对比数据，并写入报告来源；线路报告统一日期格式，将统计窗口修正为 7 天，避免单日/周维度混用。
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{4075db2}、\texttt{a90ef9e}、\texttt{98ead4a}、\texttt{fc14371}、\texttt{ff72543}（2026-05-22～27）
+\end{itemize}
+
+\section{Retrieval：PDF OCR fallback 与独立 OCR 服务}
+
+\textbf{背景}：扫描 PDF 没有文本层时会直接失败，知识库预览、入库、检索无法端到端验证；OCR 作为重依赖能力，需要独立部署、独立限流和清晰错误码。
+
+\textbf{本周}：新增 \texttt{agent/retrieval/ocr-service}，提供 FastAPI \texttt{/ocr/parse}，支持 PDF/图片解析、文件大小限制、页码范围、超时、错误码和健康检查；OCR 引擎基于 PaddleOCR，采用 worker pool + 子进程隔离，超时或 worker 异常时可替换进程。Retrieval 侧新增 \texttt{OCR\_ENABLED}、\texttt{OCR\_BASE\_URL}、\texttt{OCR\_TIMEOUT\_MS}、\texttt{OCR\_LANGUAGE}，PDF 普通解析失败或文本层过短时调用 \texttt{parseDocumentWithOcr} fallback，并在 preview warnings 中标记 \texttt{PDF\_OCR\_APPLIED} / \texttt{PDF\_TEXT\_PARSE\_FAILED}。Docker compose 增加 \texttt{host.docker.internal} 映射，便于容器内 KB 服务联调宿主机 OCR。
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{98aea3a}（2026-05-26）
+\end{itemize}
+
+\section{报告召回与车牌容错自动化资产}
+
+\textbf{背景}：router 和报告管线连续调整后，需要把手工样例固化成可重复执行的回归资产，尤其是报告应召回/不应召回、车牌缺“粤A”前缀等容错场景。
+
+\textbf{本周}：提交报告召回测试资产：\texttt{run\_recall\_tests.py} 覆盖单位、线路、驾驶员、事故的单轮/多轮场景，并通过 final SSE 中的 \texttt{metadata.tool} 判断命中；新增 \texttt{recall-test-runner.mjs} 支持 API 级执行线路/车辆报告召回 fixtures，输出 JSON 和 Markdown；新增 \texttt{plate-tolerance-test.mjs} 和车牌容错 fixture，验证缺省粤 A 车牌是否仍能路由到车辆报告、并区分“路由命中”和“数据命中”。
+
+\textbf{材料}：
+\begin{itemize}
+\item \texttt{agent/docs/manual/run\_recall\_tests.py}
+\item \texttt{agent/scripts/recall-test-runner.mjs}
+\item \texttt{agent/scripts/plate-tolerance-test.mjs}
+\item \texttt{agent/fixtures/*recall*.json}
+\item \texttt{agent/fixtures/vehicle-plate-tolerance-cases-20260421.json}
+\end{itemize}
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{7a821c0}（2026-05-26）
+\end{itemize}
+
+\section{MCP 文档与交付材料整理}
+
+\textbf{背景}：MCP 工具 description、样例和接口文档会直接影响 router 选工具和模型填参；上周审查结果、5/14 manual 与周报文档仍有一批材料未提交。
+
+\textbf{本周}：补齐 20260514 各类报告召回 manual；完成并提交 description 第一版 review，重点审核工具说明、字段口径和入参描述中容易导致“数据查不到”的问题，后续更新后有望改善部分查询失败场景。已准备第二版待办，但需等第一版更新落地并验证效果后，再继续细化第二版修改内容。同步提交 260513、260520 周报和算力建议材料，形成文档包。
+
+\textbf{相关提交（日期）}：
+\begin{itemize}
+\item \texttt{3af522c}（2026-05-25）
+\end{itemize}
+
+\section{下周计划}
+
+\begin{enumerate}
+\item 继续解决工单问题，优先处理会影响生产体验的专家问答和报告生成问题。
+
+\item 用 Compare routers 跑固定样例，统计 command router 的召回、回退、耗时和失败率，判断是否具备上线条件。
+
+\item 部署新版 retrieval 和 OCR 服务，上传新的文档，完成扫描 PDF 的预览、入库、检索、问答闭环。
+
+\item 跟进 MCP 文档修改版交付与字段口径确认，重点核对趋势、对比、风险分语义。
+\end{enumerate}
+
+\textbf{相关提交（日期）}：本节为下周计划，无对应本周单一提交。
+
+\end{document}

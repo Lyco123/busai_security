@@ -1,0 +1,18 @@
+{
+  "report_type": "vehicle",
+  "report_date": "2026-03-15",
+  "plate_number": "YueB1234",
+  "total_mileage": 128.5,
+  "energy_consumption": 185.2,
+  "fault_records": [
+    {
+      "type": "Air Conditioning System Abnormal",
+      "status": "Processed"
+    },
+    {
+      "type": "Door Sensor Fault",
+      "status": "Pending"
+    }
+  ],
+  "summary": "YueB1234 bus operated normally today with 128.5 km mileage and 185.2 kWh energy consumption."
+}

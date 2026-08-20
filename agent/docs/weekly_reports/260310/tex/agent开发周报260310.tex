@@ -1,0 +1,93 @@
+\documentclass[UTF8]{ctexart}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+\title{Agent开发周报 260310}
+\author{刘德辰}
+\date{2026年3月10日}
+
+\begin{document}
+
+\maketitle
+
+\section{Agent后端分层重构与知识库检索基础设施}
+
+\textbf{背景}：随着知识库、规则配置、研究评估和会话能力持续扩展，原有 Agent 实现集中在单文件中，继续演进的维护成本较高；同时需要为 RAG 接入独立的检索服务和部署链路。
+
+\textbf{方案说明}：将 Agent 后端拆分为 \texttt{app / domains / infra / shared / tools} 分层结构，并新增 \texttt{agent/retrieval} 检索微服务，提供 Qdrant 检索、异步索引、权限过滤和 Docker 化部署能力；同步补充接口文档、部署说明和文本编码检查流程。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 将原有 \texttt{agent/src/index.ts} 重构为 \texttt{agent/src/app/runtime.ts} 及多个领域模块，降低后续功能耦合度
+\item 新增 \texttt{agent/retrieval} 服务，覆盖 schema、repository、鉴权、embedding、Qdrant 检索、job worker 与容器化部署
+\item 网关层支持 \texttt{/api/agent/kb/*} 统一代理到检索服务，补齐租户头、调用级别和超时控制
+\item 增加 \texttt{check-text} GitHub Action、编码/乱码检测脚本与 allowlist，减少文档和代码中的文本质量问题
+\end{itemize}
+
+\section{知识库 CRUD 与入库预览流程}
+
+\textbf{背景}：知识库接入不仅需要检索能力，还需要可控的文件导入、条款校对、版本替换和权限化管理流程，避免脏数据直接进入正式库。
+
+\textbf{方案说明}：实现知识库一期 CRUD 流程，采用“预览切分 $\rightarrow$ 人工校对 $\rightarrow$ 确认提交/替换”的两段式入库方案，并通过 \texttt{preview\_id / preview\_token / file\_hash / TTL} 约束预览结果与最终提交的一致性。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 新增文档预览、提交、替换、更新元数据、删除、下载、重建索引、任务状态查询等接口
+\item 支持 \texttt{txt / md / docx / pdf} 上传；前端可手工拆分和合并条款、编辑字段路径、访问级别和标签
+\item 前端新增 \texttt{KnowledgeBase} 与 \texttt{KnowledgeBaseDetail} 页面，支持文档列表、检索调试、版本替换和最近任务状态查看
+\item 检索服务支持文档级与条款级存储、文件存储适配层、按访问级别静默过滤读取与检索结果
+\end{itemize}
+
+\section{驾驶员安全报告链路重构}
+
+\textbf{背景}：驾驶员报告此前存在实体抽取不稳、一级指标映射错位、建议与指标错配、多轮澄清承接不顺等问题，管理版模板也尚未稳定落地。
+
+\textbf{方案说明}：围绕运行时路由、报告技能和前端模板三层同时改造，增加驾驶员实体解析与候选澄清机制，强制四维映射和同序一一对应关系，使管理版驾驶员报告可以直出并稳定渲染。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item 路由层增加驾驶员报告直达识别、姓名/工号实体抽取、占位参数过滤与缺参补问
+\item 基于 \texttt{agent\_profiles} 增加精确匹配、模糊匹配、重名候选澄清和多轮承接逻辑
+\item \texttt{generate\_driver\_report} 技能对齐管理版模板，固定四个一级指标：事故风险、能耗风险、服务态度、安全评价
+\item 强化“核心风险研判 / 行为与数据关联分析 / 干预建议”之间的同序映射，修复缺失维度补位和建议错配问题
+\item 将格式约束前移并关闭自动重试，降低报告输出漂移；前端 \texttt{ReportTemplates} 完成管理版结构化渲染适配
+\end{itemize}
+
+\section{规则配置与规则回复安全边界强化}
+
+\textbf{背景}：规则配置与规则回复链路在中文业务表达、缺参判断、规则内恶意请求和测试环境路由上仍存在不稳定性，需要进一步提升收敛性与抗注入能力。
+
+\textbf{方案说明}：连续迭代 \texttt{rule\_asker}、\texttt{rule\_builder}、\texttt{rule\_reply} 和 \texttt{router} 技能，将安全边界判断前置到缺参判断之前，强化中文字段抽取、规则内安全拒绝和高命中规则路由守卫。
+
+\textbf{功能说明}：
+\begin{itemize}
+\item \texttt{rule\_asker} 强化中文业务字段抽取、patch 更新规则和引导文案，减少对显式字段名的依赖
+\item \texttt{rule\_reply} 增加“安全边界优先于缺参判断”约束，对越权索取、\texttt{do\_not\_say}、提示词注入和恶意追问在规则内直接拒绝
+\item \texttt{router} 增加高命中规则优先、同话题多轮承接、规则相关恶意请求回到 \texttt{rule\_reply} 处理等边界策略
+\item 支持测试域名路由配置，持续收敛规则配置测试回复与中文提示词表现
+\end{itemize}
+
+\section{技术债务与限制}
+
+\begin{itemize}
+\item \textbf{知识库 OCR 未接入}：当前上传 PDF 时若缺少文本层，系统会返回 \texttt{PDF\_OCR\_REQUIRED}，仍需补齐 OCR 解析链路。
+\item \textbf{知识库网关权限较严}：当前 \texttt{/api/agent/kb/*} 仅允许管理员访问，后续需根据业务确认是否开放更细粒度的只读权限。
+\item \textbf{报告能力仍以驾驶员为主}：本周重点完成了驾驶员管理版报告链路，车辆、线路和事故报告还需继续做同等级别的格式与路由收敛。
+\item \textbf{规则链路仍偏提示词驱动}：安全边界和缺参判断已强化，但系统化回归样例与自动化测试仍需补齐。
+\item \textbf{规则模板库}：建立常用规则模板，降低配置成本（无限期延后）。
+\end{itemize}
+
+\section{下周计划}
+
+\begin{enumerate}
+\item 知识库 OCR 与非文本 PDF 解析：补齐 OCR 能力，打通更多文档格式的稳定入库流程
+\item 知识库检索联调：继续完善主对话与知识库检索的联动，并验证权限透传和召回效果
+\item 报告链路统一化：将驾驶员报告的澄清、路由和模板经验扩展到车辆、线路、事故报告
+\item 规则链路回归测试：沉淀规则配置、规则回复和安全边界的系统化测试集
+\end{enumerate}
+
+\end{document}
